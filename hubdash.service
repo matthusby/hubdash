@@ -1,5 +1,5 @@
 [Unit]
-Description=hubdash: usage and limits dashboard for the hub
+Description=hubdash: subscription limits and token usage dashboard
 After=cliproxyapi.service cpamp.service network-online.target
 
 [Service]

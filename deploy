@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build for tiny, upload, and restart the user service.
+# Build, upload to the given ssh host, and restart the user service: ./deploy <host>
 set -euo pipefail
 cd "$(dirname "$0")"
-HOST="${HUB_HOST:-tiny}"
+HOST="${1:-${HUB_HOST:?usage: ./deploy <ssh-host> (or set HUB_HOST)}}"
 
 bun test
 bunx tsc --noEmit
