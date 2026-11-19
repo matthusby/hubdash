@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hub</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar">
+        <h1>Hub</h1>
+        <div class="topbar-meta">
+          <span id="updated" class="muted"></span>
+          <button id="refresh" type="button" class="icon-button" title="Refresh limits" aria-label="Refresh limits">↻</button>
+        </div>
+      </header>
+
+      <section id="cards" class="cards" aria-label="Providers"></section>
+
+      <section class="panel usage" aria-labelledby="usage-title">
+        <div class="panel-head">
+          <h2 id="usage-title">Token usage</h2>
+          <div class="filters">
+            <div class="segmented" id="range" role="group" aria-label="Time range">
+              <button type="button" data-value="day">Day</button>
+              <button type="button" data-value="week">Week</button>
+              <button type="button" data-value="month">Month</button>
+              <button type="button" data-value="6m">6 months</button>
+            </div>
+            <div class="segmented" id="provider" role="group" aria-label="Provider"></div>
+            <div class="segmented" id="view" role="group" aria-label="View">
+              <button type="button" data-value="chart">Chart</button>
+              <button type="button" data-value="table">Table</button>
+            </div>
+          </div>
+        </div>
+        <div id="legend" class="legend" role="group" aria-label="Token types (click to show or hide)"></div>
+        <div id="chart" class="chart"></div>
+        <div id="tooltip" class="tooltip" role="status" hidden></div>
+        <div id="table" class="table-wrap" hidden></div>
+      </section>
+    </main>
+    <script type="module" src="./app.ts"></script>
+  </body>
+</html>

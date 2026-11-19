@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Build for tiny, upload, and restart the user service.
+set -euo pipefail
+cd "$(dirname "$0")"
+HOST="${HUB_HOST:-tiny}"
+
+bun test
+bunx tsc --noEmit
+bun run build
+
+ssh "$HOST" 'mkdir -p ~/hubdash ~/.config/systemd/user'
+scp -q dist/hubdash "$HOST":hubdash/hubdash.new
+scp -q hubdash.service "$HOST":.config/systemd/user/hubdash.service
+ssh "$HOST" 'set -e
+  mv ~/hubdash/hubdash.new ~/hubdash/hubdash
+  systemctl --user daemon-reload
+  systemctl --user enable hubdash >/dev/null 2>&1
+  systemctl --user restart hubdash
+  for i in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:18400/api/summary && exit 0; sleep 0.5; done
+  journalctl --user -u hubdash -n 20 --no-pager; exit 1'
+echo "deployed to $HOST"

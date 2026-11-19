@@ -1,0 +1,13 @@
+[Unit]
+Description=hubdash: usage and limits dashboard for the hub
+After=cliproxyapi.service cpamp.service network-online.target
+
+[Service]
+Environment=NODE_ENV=production
+Environment=PORT=18400
+ExecStart=%h/hubdash/hubdash
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
