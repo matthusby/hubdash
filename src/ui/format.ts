@@ -35,3 +35,14 @@ export function bucketLabel(iso: string, size: BucketSize, short: boolean): stri
   if (size === "week") return short ? monthDay.format(d) : `Week of ${monthDay.format(d)}`;
   return short ? monthDay.format(d) : `${weekday.format(d)} ${monthDay.format(d)}`;
 }
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** "claude-opus-5-5" → "Opus 5.5", "gpt-6.1-sol" → "GPT-6.1 Sol"; unknown ids pass through. */
+export function modelName(id: string): string {
+  const claude = /^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/.exec(id);
+  if (claude) return `${capitalize(claude[1]!)} ${claude[2]}.${claude[3]}`;
+  const gpt = /^gpt-([\d.]+)(?:-([a-z]+))?$/.exec(id);
+  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? ` ${capitalize(gpt[2])}` : ""}`;
+  return id;
+}

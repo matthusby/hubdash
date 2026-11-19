@@ -39,7 +39,8 @@ export type BucketSize = "hour" | "day" | "week";
 
 export interface Bucket {
   start: string;
-  byProvider: Record<string, Tokens>;
+  /** provider → model → tokens */
+  byProvider: Record<string, Record<string, Tokens>>;
 }
 
 export interface UsageSeries {

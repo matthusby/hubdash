@@ -29,13 +29,26 @@
               <button type="button" data-value="6m">6 months</button>
             </div>
             <div class="segmented" id="provider" role="group" aria-label="Provider"></div>
+            <label class="select">
+              <span class="visually-hidden">Model</span>
+              <select id="model"></select>
+            </label>
             <div class="segmented" id="view" role="group" aria-label="View">
               <button type="button" data-value="chart">Chart</button>
               <button type="button" data-value="table">Table</button>
             </div>
           </div>
         </div>
-        <div id="legend" class="legend" role="group" aria-label="Token types (click to show or hide)"></div>
+        <div class="panel-head">
+          <div id="legend" class="legend" role="group"></div>
+          <div class="stack-by">
+            <span class="muted">Stack by</span>
+            <div class="segmented" id="stack" role="group" aria-label="Stack by">
+              <button type="button" data-value="type">Token type</button>
+              <button type="button" data-value="model">Model</button>
+            </div>
+          </div>
+        </div>
         <div id="chart" class="chart"></div>
         <div id="tooltip" class="tooltip" role="status" hidden></div>
         <div id="table" class="table-wrap" hidden></div>

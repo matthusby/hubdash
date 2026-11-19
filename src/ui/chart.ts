@@ -1,4 +1,4 @@
-import { TOKEN_KINDS, type BucketSize, type Tokens } from "../types.ts";
+import { TOKEN_KINDS, type BucketSize } from "../types.ts";
 import * as fmt from "./format.ts";
 
 export type TokenKind = (typeof TOKEN_KINDS)[number];
@@ -10,10 +10,20 @@ export const KIND_LABELS: Record<TokenKind, string> = {
   output: "Output",
 };
 
+/** One stacked layer, bottom first. `color` is any CSS color, usually a `var(--slot-n)`. */
+export interface Series {
+  key: string;
+  label: string;
+  color: string;
+}
+
 export interface ChartPoint {
   start: string;
-  tokens: Tokens;
+  values: Record<string, number>;
 }
+
+export const pointTotal = (point: ChartPoint, series: Series[]): number =>
+  series.reduce((sum, s) => sum + (point.values[s.key] ?? 0), 0);
 
 const SVG = "http://www.w3.org/2000/svg";
 const MARGIN = { top: 8, right: 4, bottom: 22, left: 44 };
@@ -42,8 +52,9 @@ function capPath(x: number, y: number, w: number, h: number): string {
 export function renderChart(
   container: HTMLElement,
   points: ChartPoint[],
-  kinds: TokenKind[],
+  series: Series[],
   size: BucketSize,
+  emptyMessage: string,
   onHover: (index: number | null, event?: MouseEvent) => void,
 ): void {
   container.replaceChildren();
@@ -51,13 +62,12 @@ export function renderChart(
   const height = container.clientHeight;
   const plotW = width - MARGIN.left - MARGIN.right;
   const plotH = height - MARGIN.top - MARGIN.bottom;
-  const totals = points.map((p) => kinds.reduce((sum, k) => sum + p.tokens[k], 0));
-  const max = Math.max(...totals, 0);
+  const max = Math.max(...points.map((p) => pointTotal(p, series)), 0);
 
-  if (kinds.length === 0 || max === 0) {
+  if (max === 0) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = kinds.length === 0 ? "All token types hidden" : "No usage in this range";
+    empty.textContent = emptyMessage;
     container.append(empty);
     return;
   }
@@ -88,17 +98,16 @@ export function renderChart(
     hit.addEventListener("mouseleave", () => onHover(null));
     svg.append(hit);
 
-    const visible = kinds.filter((k) => point.tokens[k] > 0);
+    const visible = series.filter((s) => (point.values[s.key] ?? 0) > 0);
     let base = 0;
-    visible.forEach((kind, j) => {
-      const value = point.tokens[kind];
+    visible.forEach(({ key, color: fill }, j) => {
+      const value = point.values[key] ?? 0;
       const y0 = y(base);
       const y1 = y(base + value);
       base += value;
       const isTop = j === visible.length - 1;
       const h = isTop ? Math.max(y0 - y1, 1) : y0 - y1 - SEGMENT_GAP;
       if (h <= 0) return;
-      const fill = `var(--series-${kind})`;
       const segment = isTop
         ? el("path", { d: capPath(x, y1, barW, h), fill })
         : el("rect", { x, y: y1 + SEGMENT_GAP, width: barW, height: h, fill });

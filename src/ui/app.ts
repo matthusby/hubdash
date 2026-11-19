@@ -1,9 +1,9 @@
 import { pace } from "../pace.ts";
 import {
   TOKEN_KINDS,
-  emptyTokens,
   totalTokens,
   type AccountLimits,
+  type Bucket,
   type Limit,
   type ProviderCard,
   type Range,
@@ -11,11 +11,13 @@ import {
   type Tokens,
   type UsageSeries,
 } from "../types.ts";
-import { KIND_LABELS, renderChart, type ChartPoint, type TokenKind } from "./chart.ts";
+import { KIND_LABELS, pointTotal, renderChart, type ChartPoint, type Series, type TokenKind } from "./chart.ts";
 import * as fmt from "./format.ts";
 
 const SUMMARY_POLL_MS = 60_000;
 const USAGE_POLL_MS = 5 * 60_000;
+const MODEL_SLOTS = 4;
+const OTHER = "__other__";
 const PROVIDER_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex" };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -27,7 +29,14 @@ const state = {
   provider: localStorage.getItem("provider") ?? "all",
   view: localStorage.getItem("view") ?? "chart",
   hidden: new Set<TokenKind>(JSON.parse(localStorage.getItem("hidden") ?? "[]")),
+  model: localStorage.getItem("model") ?? "all",
+  stack: localStorage.getItem("stack") ?? "type",
 };
+
+function setModel(model: string): void {
+  state.model = model;
+  localStorage.setItem("model", model);
+}
 
 const providerName = (p: string) => PROVIDER_NAMES[p] ?? p;
 
@@ -127,65 +136,160 @@ function renderProviderFilter(): void {
   syncPressed(group, state.provider);
 }
 
-function points(): ChartPoint[] {
-  return (state.series?.buckets ?? []).map((bucket) => {
-    const tokens = emptyTokens();
-    for (const [provider, t] of Object.entries(bucket.byProvider)) {
-      if (state.provider !== "all" && provider !== state.provider) continue;
-      for (const k of TOKEN_KINDS) tokens[k] += t[k];
+interface ModelUsage {
+  provider: string;
+  model: string;
+  tokens: Tokens;
+}
+
+const matchesProvider = (provider: string) => state.provider === "all" || provider === state.provider;
+
+function bucketUsage(bucket: Bucket): ModelUsage[] {
+  return Object.entries(bucket.byProvider).flatMap(([provider, models]) =>
+    Object.entries(models).map(([model, tokens]) => ({ provider, model, tokens })),
+  );
+}
+
+function providerOf(model: string): string | undefined {
+  for (const bucket of state.series?.buckets ?? []) {
+    for (const [provider, models] of Object.entries(bucket.byProvider)) if (model in models) return provider;
+  }
+}
+
+/** Models in the current range under the provider filter, busiest first. */
+function rankedModels(): { model: string; provider: string }[] {
+  const totals = new Map<string, { model: string; provider: string; total: number }>();
+  for (const bucket of state.series?.buckets ?? []) {
+    for (const { provider, model, tokens } of bucketUsage(bucket)) {
+      if (!matchesProvider(provider)) continue;
+      const entry = totals.get(model) ?? set(totals, model, { model, provider, total: 0 });
+      entry.total += totalTokens(tokens);
     }
-    return { start: bucket.start, tokens };
+  }
+  return [...totals.values()].sort((a, b) => b.total - a.total);
+}
+
+const stackBy = (): "type" | "model" => (state.model === "all" && state.stack === "model" ? "model" : "type");
+
+const modelSeries = (models: string[]): Series[] =>
+  models.map((model, i) => ({ key: model, label: fmt.modelName(model), color: `var(--slot-${i + 1})` }));
+
+/** Chart layers; model stacking keeps the top slots and folds the rest into Other. */
+function chartSeries(ranked: string[]): Series[] {
+  if (stackBy() === "type") {
+    return TOKEN_KINDS.filter((k) => !state.hidden.has(k)).map((k) => ({
+      key: k,
+      label: KIND_LABELS[k],
+      color: `var(--slot-${TOKEN_KINDS.indexOf(k) + 1})`,
+    }));
+  }
+  if (ranked.length <= MODEL_SLOTS) return modelSeries(ranked);
+  return [...modelSeries(ranked.slice(0, MODEL_SLOTS)), { key: OTHER, label: "Other", color: "var(--slot-other)" }];
+}
+
+function points(series: Series[]): ChartPoint[] {
+  const byModel = stackBy() === "model";
+  const keys = new Set(series.map((s) => s.key));
+  return (state.series?.buckets ?? []).map((bucket) => {
+    const values: Record<string, number> = Object.fromEntries(series.map((s) => [s.key, 0]));
+    for (const { provider, model, tokens } of bucketUsage(bucket)) {
+      if (!matchesProvider(provider) || (state.model !== "all" && model !== state.model)) continue;
+      if (byModel) {
+        const key = keys.has(model) ? model : OTHER;
+        values[key] = (values[key] ?? 0) + totalTokens(tokens);
+      } else {
+        for (const s of series) values[s.key] = (values[s.key] ?? 0) + tokens[s.key as TokenKind];
+      }
+    }
+    return { start: bucket.start, values };
   });
 }
 
-const shownKinds = (): TokenKind[] => TOKEN_KINDS.filter((k) => !state.hidden.has(k));
+function renderModelFilter(ranked: { model: string; provider: string }[]): void {
+  const option = (model: string) =>
+    `<option value="${escape(model)}">${escape(fmt.modelName(model))}</option>`;
+  const known = ranked.some((r) => r.model === state.model);
+  const groups = [...new Set(ranked.map((r) => r.provider))].map((provider) => {
+    const options = ranked.filter((r) => r.provider === provider).map((r) => option(r.model)).join("");
+    return state.provider === "all" ? `<optgroup label="${escape(providerName(provider))}">${options}</optgroup>` : options;
+  });
+  const select = $<HTMLSelectElement>("model");
+  select.innerHTML = [
+    '<option value="all">All models</option>',
+    state.model === "all" || known ? "" : option(state.model),
+    ...groups,
+  ].join("");
+  select.value = state.model;
+}
 
-function renderLegend(): void {
-  $("legend").innerHTML = TOKEN_KINDS.map(
+function renderLegend(series: Series[]): void {
+  const legend = $("legend");
+  if (stackBy() === "model") {
+    legend.setAttribute("aria-label", "Models");
+    legend.innerHTML = series
+      .map((s) => `<span class="chip"><span class="swatch" style="background:${s.color}"></span>${escape(s.label)}</span>`)
+      .join("");
+    return;
+  }
+  legend.setAttribute("aria-label", "Token types (click to show or hide)");
+  legend.innerHTML = TOKEN_KINDS.map(
     (k) => `<button type="button" data-kind="${k}" aria-pressed="${!state.hidden.has(k)}">
-      <span class="swatch" style="background:var(--series-${k})"></span>${KIND_LABELS[k]}</button>`,
+      <span class="swatch" style="background:var(--slot-${TOKEN_KINDS.indexOf(k) + 1})"></span>${KIND_LABELS[k]}</button>`,
   ).join("");
 }
 
 function renderUsage(): void {
   syncPressed($("range"), state.range);
   syncPressed($("view"), state.view);
-  renderLegend();
-  const series = state.series;
-  if (!series) return;
-  const data = points();
+  syncPressed($("stack"), stackBy());
+  const modelStack = $("stack").querySelector<HTMLButtonElement>('[data-value="model"]')!;
+  modelStack.disabled = state.model !== "all";
+  modelStack.title = modelStack.disabled ? "Choose All models to stack by model" : "";
+
+  const ranked = rankedModels();
+  renderModelFilter(ranked);
+  const rankedIds = ranked.map((r) => r.model);
+  const series = chartSeries(rankedIds);
+  renderLegend(series);
+
+  const usage = state.series;
+  if (!usage) return;
   const showTable = state.view === "table";
   $("chart").hidden = showTable;
   $("table").hidden = !showTable;
-  if (showTable) renderTable(data, series);
-  else renderChart($("chart"), data, shownKinds(), series.bucketSize, (i, e) => showTooltip(data, series, i, e));
+  if (showTable) {
+    const columns = stackBy() === "model" ? modelSeries(rankedIds) : series;
+    renderTable(points(columns), columns, usage);
+  } else {
+    const data = points(series);
+    const empty = series.length === 0 ? "All token types hidden" : "No usage in this range";
+    renderChart($("chart"), data, series, usage.bucketSize, empty, (i, e) => showTooltip(data, series, usage, i, e));
+  }
 }
 
-function renderTable(data: ChartPoint[], series: UsageSeries): void {
-  const kinds = shownKinds();
+function renderTable(data: ChartPoint[], columns: Series[], usage: UsageSeries): void {
   const rows = [...data].reverse().map(
-    (p) => `<tr><td>${fmt.bucketLabel(p.start, series.bucketSize, false)}</td>${kinds
-      .map((k) => `<td class="num">${fmt.tokensFull(p.tokens[k])}</td>`)
-      .join("")}<td class="num">${fmt.tokensFull(kinds.reduce((s, k) => s + p.tokens[k], 0))}</td></tr>`,
+    (p) => `<tr><td>${fmt.bucketLabel(p.start, usage.bucketSize, false)}</td>${columns
+      .map((s) => `<td class="num">${fmt.tokensFull(p.values[s.key] ?? 0)}</td>`)
+      .join("")}<td class="num">${fmt.tokensFull(pointTotal(p, columns))}</td></tr>`,
   );
   $("table").innerHTML = `<table><thead><tr><th>${
-    series.bucketSize === "hour" ? "Hour" : series.bucketSize === "week" ? "Week" : "Day"
-  }</th>${kinds.map((k) => `<th>${KIND_LABELS[k]}</th>`).join("")}<th>Total</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    usage.bucketSize === "hour" ? "Hour" : usage.bucketSize === "week" ? "Week" : "Day"
+  }</th>${columns.map((s) => `<th>${escape(s.label)}</th>`).join("")}<th>Total</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
-function showTooltip(data: ChartPoint[], series: UsageSeries, index: number | null, event?: MouseEvent): void {
+function showTooltip(data: ChartPoint[], series: Series[], usage: UsageSeries, index: number | null, event?: MouseEvent): void {
   const tooltip = $("tooltip");
   const point = index === null ? undefined : data[index];
   if (!point || !event) {
     tooltip.hidden = true;
     return;
   }
-  const kinds = shownKinds();
   tooltip.innerHTML = `
-    <div class="tooltip-title">${fmt.bucketLabel(point.start, series.bucketSize, false)}</div>
-    ${[...kinds].reverse().map((k) => `<div class="tooltip-row"><span class="swatch" style="background:var(--series-${k})"></span>
-      <span>${KIND_LABELS[k]}</span><span class="num">${fmt.tokens(point.tokens[k])}</span></div>`).join("")}
-    <div class="tooltip-total"><span>Total</span><span class="num">${fmt.tokens(kinds.reduce((s, k) => s + point.tokens[k], 0))}</span></div>`;
+    <div class="tooltip-title">${fmt.bucketLabel(point.start, usage.bucketSize, false)}</div>
+    ${[...series].reverse().map((s) => `<div class="tooltip-row"><span class="swatch" style="background:${s.color}"></span>
+      <span>${escape(s.label)}</span><span class="num">${fmt.tokens(point.values[s.key] ?? 0)}</span></div>`).join("")}
+    <div class="tooltip-total"><span>Total</span><span class="num">${fmt.tokens(pointTotal(point, series))}</span></div>`;
   tooltip.hidden = false;
 
   const panel = tooltip.offsetParent as HTMLElement;
@@ -204,9 +308,14 @@ function syncPressed(group: HTMLElement, value: string): void {
 
 function onSegment(id: string, handler: (value: string) => void): void {
   $(id).addEventListener("click", (e) => {
-    const value = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-value]")?.dataset.value;
+    const value = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-value]:not(:disabled)")?.dataset.value;
     if (value) handler(value);
   });
+}
+
+function set<K, V>(map: Map<K, V>, key: K, value: V): V {
+  map.set(key, value);
+  return value;
 }
 
 async function loadSummary(refresh = false): Promise<void> {
@@ -229,7 +338,18 @@ onSegment("range", (value) => {
 onSegment("provider", (value) => {
   state.provider = value;
   localStorage.setItem("provider", value);
+  const modelProvider = providerOf(state.model);
+  if (modelProvider && !matchesProvider(modelProvider)) setModel("all");
   renderProviderFilter();
+  renderUsage();
+});
+onSegment("stack", (value) => {
+  state.stack = value;
+  localStorage.setItem("stack", value);
+  renderUsage();
+});
+$("model").addEventListener("change", (e) => {
+  setModel((e.target as HTMLSelectElement).value);
   renderUsage();
 });
 onSegment("view", (value) => {

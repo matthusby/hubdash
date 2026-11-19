@@ -22,22 +22,27 @@ describe("buckets", () => {
   });
 });
 
-test("series sums uncached input, cache, and output per provider into local-day buckets", () => {
+test("series sums uncached input, cache, and output per provider and model into local-day buckets", () => {
   const path = join(dir, "usage.sqlite");
   const db = new Database(path);
-  db.run(`create table usage_events (timestamp_ms integer, provider text, normalized_uncached_input_tokens integer,
+  db.run(`create table usage_events (timestamp_ms integer, provider text, model text, normalized_uncached_input_tokens integer,
     normalized_cache_read_tokens integer, normalized_cache_creation_tokens integer, output_tokens integer)`);
-  const insert = db.prepare("insert into usage_events values (?, ?, ?, ?, ?, ?)");
+  const insert = db.prepare("insert into usage_events values (?, ?, ?, ?, ?, ?, ?)");
   const now = new Date(2026, 10, 19, 15);
-  insert.run(new Date(2026, 10, 19, 9).getTime(), "claude", 10, 1000, 100, 50);
-  insert.run(new Date(2026, 10, 19, 14).getTime(), "claude", 5, 500, 0, 25);
-  insert.run(new Date(2026, 10, 18, 23, 30).getTime(), "codex", 7, 70, 0, 3);
-  insert.run(new Date(2026, 10, 1).getTime(), "codex", 999, 999, 999, 999);
+  insert.run(new Date(2026, 10, 19, 9).getTime(), "claude", "claude-opus-5-5", 10, 1000, 100, 50);
+  insert.run(new Date(2026, 10, 19, 14).getTime(), "claude", "claude-fable-5-2", 5, 500, 0, 25);
+  insert.run(new Date(2026, 10, 18, 23, 30).getTime(), "codex", "gpt-6.1-sol", 7, 70, 0, 3);
+  insert.run(new Date(2026, 10, 1).getTime(), "codex", "gpt-6.1-sol", 999, 999, 999, 999);
   db.close();
 
   const series = new UsageStore(path).series("week", now);
   expect(series.buckets).toHaveLength(7);
   const [yesterday, today] = series.buckets.slice(-2);
-  expect(today!.byProvider).toEqual({ claude: { input: 15, cacheRead: 1500, cacheWrite: 100, output: 75 } });
-  expect(yesterday!.byProvider).toEqual({ codex: { input: 7, cacheRead: 70, cacheWrite: 0, output: 3 } });
+  expect(today!.byProvider).toEqual({
+    claude: {
+      "claude-opus-5-5": { input: 10, cacheRead: 1000, cacheWrite: 100, output: 50 },
+      "claude-fable-5-2": { input: 5, cacheRead: 500, cacheWrite: 0, output: 25 },
+    },
+  });
+  expect(yesterday!.byProvider).toEqual({ codex: { "gpt-6.1-sol": { input: 7, cacheRead: 70, cacheWrite: 0, output: 3 } } });
 });

@@ -6,6 +6,7 @@ const HOUR_MS = 3_600_000;
 interface HourRow extends Tokens {
   hour: number;
   provider: string;
+  model: string;
 }
 
 /** Read-only view over CPA Manager Plus's usage_events table. */
@@ -16,18 +17,18 @@ export class UsageStore {
     this.db = new Database(path, { readonly: true });
   }
 
-  /** Per-hour, per-provider token sums since `sinceMs`. Cached input is never counted as input. */
+  /** Per-hour, per-provider, per-model token sums since `sinceMs`. Cached input is never counted as input. */
   hourly(sinceMs: number): HourRow[] {
     return this.db
       .query<HourRow, [number]>(
-        `select timestamp_ms / ${HOUR_MS} as hour, provider,
+        `select timestamp_ms / ${HOUR_MS} as hour, provider, coalesce(model, 'unknown') as model,
                 sum(normalized_uncached_input_tokens) as input,
                 sum(normalized_cache_read_tokens) as cacheRead,
                 sum(normalized_cache_creation_tokens) as cacheWrite,
                 sum(output_tokens) as output
            from usage_events
           where timestamp_ms >= ?
-          group by hour, provider`,
+          group by hour, provider, model`,
       )
       .all(Math.floor(sinceMs / HOUR_MS) * HOUR_MS);
   }
@@ -50,7 +51,7 @@ export class UsageStore {
     for (const row of this.hourly(starts[0]!)) {
       const bucket = buckets.get(bucketStart(row.hour * HOUR_MS, bucketSize));
       if (!bucket) continue;
-      addTokens((bucket.byProvider[row.provider] ??= emptyTokens()), row);
+      addTokens(((bucket.byProvider[row.provider] ??= {})[row.model] ??= emptyTokens()), row);
     }
     return { range, bucketSize, buckets: [...buckets.values()] };
   }
