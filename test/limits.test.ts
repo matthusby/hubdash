@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { claudeLimits, claudeResets, codexLimits, nextResetExpiry } from "../src/limits.ts";
+import { antigravityLimits, claudeLimits, claudeResets, codexLimits, nextResetExpiry } from "../src/limits.ts";
 
 describe("claudeLimits", () => {
   test("names the session, weekly, and model-scoped weekly limits", () => {
@@ -69,4 +69,36 @@ test("nextResetExpiry picks the soonest available credit", () => {
     ],
   })).toBe("2026-11-30T20:19:35Z");
   expect(nextResetExpiry({ credits: [] })).toBeNull();
+});
+
+describe("antigravityLimits", () => {
+  const fiveHour = "2026-11-21T04:42:12Z";
+  const weekly = "2026-11-27T23:42:12Z";
+
+  test("names each group's buckets, 5-hour first", () => {
+    const limits = antigravityLimits({
+      groups: [
+        {
+          displayName: "Gemini Models",
+          buckets: [
+            { window: "weekly", remainingFraction: 0.75, resetTime: weekly },
+            { window: "5h", remainingFraction: 0.4, resetTime: fiveHour },
+          ],
+        },
+        { displayName: "Gemini 4 Argon", buckets: [{ window: "weekly", remainingFraction: 1, resetTime: weekly }] },
+      ],
+    });
+    expect(limits.map((l) => [l.name, l.usedPercent, l.windowSeconds])).toEqual([
+      ["5-hour · Gemini", 60, 18000],
+      ["Weekly · Gemini", 25, 604800],
+      ["Weekly · Gemini 4 Argon", 0, 604800],
+    ]);
+  });
+
+  test("reads a bucket with no remaining fraction as exhausted", () => {
+    const limits = antigravityLimits({
+      groups: [{ displayName: "Claude and GPT models", buckets: [{ window: "5h", resetTime: fiveHour }] }],
+    });
+    expect(limits.map((l) => [l.name, l.usedPercent])).toEqual([["5-hour · Claude and GPT", 100]]);
+  });
 });

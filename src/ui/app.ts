@@ -19,7 +19,7 @@ const SUMMARY_POLL_MS = 60_000;
 const USAGE_POLL_MS = 5 * 60_000;
 const MODEL_SLOTS = 4;
 const OTHER = "__other__";
-const PROVIDER_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex" };
+const PROVIDER_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 

@@ -8,6 +8,8 @@ export interface LimitsConfig {
   managementKey: string;
   /** Sent as Claude Code's User-Agent; Anthropic hides reset grants from old versions. */
   claudeCodeVersion: string;
+  /** Sent as Antigravity Hub's User-Agent; Google hides the Gemini quota groups from old or unversioned clients. */
+  antigravityVersion: string;
 }
 
 interface Credential {
@@ -59,6 +61,15 @@ interface CodexResetCredits {
   credits?: { status?: string; expires_at?: string }[];
 }
 
+interface AntigravityQuotaSummary {
+  groups?: {
+    displayName?: string | null;
+    buckets?: { window?: string | null; remainingFraction?: number | null; resetTime?: string | null }[] | null;
+  }[] | null;
+}
+
+const ANTIGRAVITY_WINDOWS: Record<string, number> = { "5h": FIVE_HOURS, weekly: ONE_WEEK };
+
 export function claudeLimits(usage: ClaudeUsage): Limit[] {
   return (usage.limits ?? []).flatMap((limit) => {
     if (limit.percent == null || !limit.resets_at) return [];
@@ -91,6 +102,28 @@ export function codexLimits(usage: CodexUsage): Limit[] {
         : [],
     )
     .sort((a, b) => a.windowSeconds - b.windowSeconds);
+}
+
+/** Antigravity's models share limits in groups ("Gemini Models"), each with a 5-hour and/or weekly bucket. */
+export function antigravityLimits(summary: AntigravityQuotaSummary): Limit[] {
+  return (summary.groups ?? []).flatMap((group) => {
+    const scope = group.displayName?.replace(/ models$/i, "");
+    return (group.buckets ?? [])
+      .flatMap((bucket) => {
+        const windowSeconds = ANTIGRAVITY_WINDOWS[bucket.window ?? ""];
+        if (!windowSeconds || !bucket.resetTime) return [];
+        return [
+          {
+            name: scope ? `${windowName(windowSeconds)} · ${scope}` : windowName(windowSeconds),
+            // Protobuf JSON omits zero values, so an exhausted bucket has no remainingFraction.
+            usedPercent: (1 - (bucket.remainingFraction ?? 0)) * 100,
+            resetsAt: bucket.resetTime,
+            windowSeconds,
+          },
+        ];
+      })
+      .sort((a, b) => a.windowSeconds - b.windowSeconds);
+  });
 }
 
 /** Unspent, unexpired reset grants, counted by what they refill. */
@@ -142,12 +175,12 @@ async function management<T>(config: LimitsConfig, path: string, init?: RequestI
   return (await response.json()) as T;
 }
 
-/** GET an upstream URL as one account; the proxy substitutes its token for $TOKEN$. */
+/** Call an upstream URL as one account; the proxy substitutes its token for $TOKEN$. */
 async function asAccount<T>(
   config: LimitsConfig,
   authIndex: string,
   url: string,
-  header: Record<string, string> = {},
+  { method = "GET", header = {} }: { method?: "GET" | "POST"; header?: Record<string, string> } = {},
 ): Promise<T> {
   const { status_code, body } = await management<{ status_code: number; body: unknown }>(
     config,
@@ -156,7 +189,7 @@ async function asAccount<T>(
       method: "POST",
       body: JSON.stringify({
         authIndex,
-        method: "GET",
+        method,
         url,
         header: { Authorization: "Bearer $TOKEN$", ...header },
       }),
@@ -171,7 +204,12 @@ async function claudeAccount(config: LimitsConfig, credential: Credential): Prom
     config,
     credential.auth_index,
     "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
-    { "anthropic-beta": "oauth-2025-04-20", "User-Agent": `claude-cli/${config.claudeCodeVersion} (external, cli)` },
+    {
+      header: {
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": `claude-cli/${config.claudeCodeVersion} (external, cli)`,
+      },
+    },
   );
   return {
     label: accountLabel(credential),
@@ -200,6 +238,22 @@ async function codexAccount(config: LimitsConfig, credential: Credential): Promi
   };
 }
 
+async function antigravityAccount(config: LimitsConfig, credential: Credential): Promise<AccountLimits> {
+  const summary = await asAccount<AntigravityQuotaSummary>(
+    config,
+    credential.auth_index,
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    { method: "POST", header: { "User-Agent": `antigravity/hub/${config.antigravityVersion} darwin/arm64` } },
+  );
+  return {
+    label: accountLabel(credential),
+    plan: null,
+    limits: antigravityLimits(summary),
+    resets: null,
+    error: null,
+  };
+}
+
 function codexResets(usage: CodexUsage, credits: CodexResetCredits): Resets | null {
   const available = usage.rate_limit_reset_credits?.available_count;
   return available == null ? null : { available, nextExpiry: nextResetExpiry(credits), kinds: [] };
@@ -211,6 +265,7 @@ const accountLabel = (credential: Credential): string =>
 const fetchers: Record<string, (config: LimitsConfig, c: Credential) => Promise<AccountLimits>> = {
   claude: claudeAccount,
   codex: codexAccount,
+  antigravity: antigravityAccount,
 };
 
 /** Limits for every enabled account the proxy knows, grouped by provider. */

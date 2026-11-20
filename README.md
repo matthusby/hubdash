@@ -1,6 +1,6 @@
 # hubdash
 
-A small new-tab dashboard for Claude and Codex subscriptions routed through
+A small new-tab dashboard for Claude, Codex, and Antigravity subscriptions routed through
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). It shows how much of each rate limit is left and
 where your tokens went.
 
@@ -12,7 +12,7 @@ where your tokens went.
 ## What it shows
 
 - **A card per provider**: tokens today and over the last 30 days, then each limit (5-hour, weekly, Claude's
-  per-model weekly). For each one: how much is left, how far through the window you are, when it resets, and a
+  per-model weekly, Antigravity's 5-hour and weekly per model group). For each one: how much is left, how far through the window you are, when it resets, and a
   pace estimate: what you'll have left at reset, or roughly when you'll run out.
 - **Resets available** for both providers, with the next expiry. Claude's are split by what they refill
   (full, Fable, …).
@@ -28,8 +28,8 @@ One Bun binary serves the page and a small JSON API:
 - **Token usage** is read from the SQLite database kept by
   [CPA-Manager-Plus](https://github.com/seakee/CPA-Manager-Plus) (`usage_events`).
 
-The usage endpoints (`api.anthropic.com/api/oauth/usage`, `chatgpt.com/backend-api/wham/usage`) are undocumented
-and may change. If one fails, that account shows "Limits unavailable" and the rest of the page keeps working.
+The usage endpoints (`api.anthropic.com/api/oauth/usage`, `chatgpt.com/backend-api/wham/usage`,
+`cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`) are undocumented and may change. If one fails, that account shows "Limits unavailable" and the rest of the page keeps working.
 
 ## Requirements
 
@@ -45,6 +45,7 @@ and may change. If one fails, that account shows "Limits unavailable" and the re
 | `SECRETS_FILE` | `~/cliproxyapi/secrets.env`          | File containing a `MGMT_KEY=` line             |
 | `USAGE_DB`     | `~/cpamp/data/usage.sqlite`          | CPA-Manager-Plus database (opened read-only)   |
 | `CLAUDE_CODE_VERSION` | `2.1.327`                     | Claude Code version sent when reading reset grants; Anthropic hides them from old versions |
+| `ANTIGRAVITY_VERSION` | `2.34.0`                      | Antigravity Hub version sent when reading quotas; Google hides the Gemini groups from old versions |
 
 ## Development
 

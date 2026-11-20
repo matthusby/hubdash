@@ -14,6 +14,7 @@ const limitsConfig: LimitsConfig = {
   proxyUrl: process.env.PROXY_URL ?? "http://127.0.0.1:8317",
   managementKey: await readSecret(process.env.SECRETS_FILE ?? `${HOME}/cliproxyapi/secrets.env`, "MGMT_KEY"),
   claudeCodeVersion: process.env.CLAUDE_CODE_VERSION ?? "2.1.327",
+  antigravityVersion: process.env.ANTIGRAVITY_VERSION ?? "2.34.0",
 };
 const usage = new UsageStore(process.env.USAGE_DB ?? `${HOME}/cpamp/data/usage.sqlite`);
 
