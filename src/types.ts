@@ -9,10 +9,14 @@ export interface AccountLimits {
   label: string;
   plan: string | null;
   limits: Limit[];
-  resetsAvailable: number | null;
-  nextResetExpiry: string | null;
+  resets: Resets | null;
   error: string | null;
 }
+
+/** Limit resets the account can spend, or why the provider won't say. */
+export type Resets =
+  | { available: number; nextExpiry: string | null; kinds: { kind: string; count: number }[] }
+  | { unavailable: string };
 
 export interface Tokens {
   input: number;

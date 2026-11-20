@@ -14,7 +14,8 @@ where your tokens went.
 - **A card per provider**: tokens today and over the last 30 days, then each limit (5-hour, weekly, Claude's
   per-model weekly). For each one: how much is left, how far through the window you are, when it resets, and a
   pace estimate: what you'll have left at reset, or roughly when you'll run out.
-- **Codex resets available**, with the next expiry.
+- **Resets available** for both providers, with the next expiry. Claude's are split by what they refill
+  (full, Fable, …).
 - **Token usage over time** for a day, week, month, or 6 months. Filter by provider or model, stack by token
   type (input, cache read, cache write, output) or by model, or switch to a table.
 
@@ -43,6 +44,7 @@ and may change. If one fails, that account shows "Limits unavailable" and the re
 | `PROXY_URL`    | `http://127.0.0.1:8317`              | CLIProxyAPI base URL                           |
 | `SECRETS_FILE` | `~/cliproxyapi/secrets.env`          | File containing a `MGMT_KEY=` line             |
 | `USAGE_DB`     | `~/cpamp/data/usage.sqlite`          | CPA-Manager-Plus database (opened read-only)   |
+| `CLAUDE_CODE_VERSION` | `2.1.327`                     | Claude Code version sent when reading reset grants; Anthropic hides them from old versions |
 
 ## Development
 

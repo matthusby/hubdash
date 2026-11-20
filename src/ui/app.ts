@@ -7,6 +7,7 @@ import {
   type Limit,
   type ProviderCard,
   type Range,
+  type Resets,
   type Summary,
   type Tokens,
   type UsageSeries,
@@ -82,15 +83,29 @@ function accountHtml(account: AccountLimits, showLabel: boolean, now: number): s
   if (account.error) {
     return `<div class="account">${head}<div class="account-error">Limits unavailable: ${escape(account.error)}</div></div>`;
   }
-  const resets = account.resetsAvailable === null
-    ? ""
-    : `<div class="resets"><span>Resets available</span><span class="num"><strong>${account.resetsAvailable}</strong>${
-        account.nextResetExpiry ? ` <span class="muted">· next expires ${fmt.moment(Date.parse(account.nextResetExpiry), now)}</span>` : ""
-      }</span></div>`;
   const limits = account.limits.length
     ? account.limits.map((l) => limitHtml(l, now)).join("")
     : '<div class="account-error">No limits reported</div>';
-  return `<div class="account">${head}${limits}${resets}</div>`;
+  return `<div class="account">${head}${limits}${resetsHtml(account.resets, now)}</div>`;
+}
+
+const UNAVAILABLE_REASONS: Record<string, string> = {
+  cli_version: "Claude Code version too old; raise CLAUDE_CODE_VERSION",
+};
+
+function resetsHtml(resets: Resets | null, now: number): string {
+  if (!resets) return "";
+  if ("unavailable" in resets) {
+    const reason = UNAVAILABLE_REASONS[resets.unavailable] ?? resets.unavailable;
+    return `<div class="resets"><span>Resets available</span><span class="muted">unknown · ${escape(reason)}</span></div>`;
+  }
+  const details = [
+    resets.kinds.map((k) => `${k.count} ${escape(k.kind)}`).join(", "),
+    resets.nextExpiry ? `next expires ${fmt.moment(Date.parse(resets.nextExpiry), now)}` : "",
+  ].filter(Boolean);
+  return `<div class="resets"><span>Resets available</span><span class="num"><strong>${resets.available}</strong>${
+    details.length ? ` <span class="muted">· ${details.join(" · ")}</span>` : ""
+  }</span></div>`;
 }
 
 function statHtml(label: string, t: Tokens): string {

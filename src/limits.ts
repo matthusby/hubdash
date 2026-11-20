@@ -1,11 +1,13 @@
-import type { AccountLimits, Limit } from "./types.ts";
+import type { AccountLimits, Limit, Resets } from "./types.ts";
 
 const FIVE_HOURS = 5 * 3600;
 const ONE_WEEK = 7 * 86400;
 
-export interface ProxyConfig {
-  url: string;
+export interface LimitsConfig {
+  proxyUrl: string;
   managementKey: string;
+  /** Sent as Claude Code's User-Agent; Anthropic hides reset grants from old versions. */
+  claudeCodeVersion: string;
 }
 
 interface Credential {
@@ -24,6 +26,21 @@ interface ClaudeUsage {
     resets_at?: string | null;
     scope?: { model?: { display_name?: string | null } | null } | null;
   }[] | null;
+  cedar_ember?: ClaudeResetGrants | null;
+}
+
+interface ClaudeResetGrant {
+  resets_left?: number | null;
+  ends_at?: string | null;
+  type?: string | null;
+  clears?: string[] | null;
+  gives_back_weekly?: boolean | null;
+}
+
+interface ClaudeResetGrants {
+  eligible?: boolean | null;
+  ineligible_reason?: string | null;
+  grants?: ClaudeResetGrant[] | null;
 }
 
 interface CodexWindow {
@@ -76,6 +93,32 @@ export function codexLimits(usage: CodexUsage): Limit[] {
     .sort((a, b) => a.windowSeconds - b.windowSeconds);
 }
 
+/** Unspent, unexpired reset grants, counted by what they refill. */
+export function claudeResets(grants: ClaudeResetGrants | null | undefined, now: number = Date.now()): Resets | null {
+  if (!grants) return null;
+  if (!grants.eligible) return { unavailable: grants.ineligible_reason ?? "not eligible" };
+  const live = (grants.grants ?? []).filter(
+    (g) => (g.resets_left ?? 0) > 0 && !(g.ends_at && Date.parse(g.ends_at) <= now),
+  );
+  const counts = new Map<string, number>();
+  for (const grant of live) counts.set(grantKind(grant), (counts.get(grantKind(grant)) ?? 0) + grant.resets_left!);
+  return {
+    available: live.reduce((sum, g) => sum + g.resets_left!, 0),
+    nextExpiry: live.flatMap((g) => (g.ends_at ? [g.ends_at] : [])).sort()[0] ?? null,
+    kinds: [...counts].map(([kind, count]) => ({ kind, count })),
+  };
+}
+
+/** A grant that gives back the week's Fable use is a Fable reset whatever its type says, as in Claude Code. */
+function grantKind(grant: ClaudeResetGrant): string {
+  if (grant.gives_back_weekly) return "Fable";
+  if (grant.type === "session" || grant.type === "weekly" || grant.type === "full") return grant.type;
+  const clears = grant.clears ?? [];
+  const session = clears.includes("five_hour");
+  const other = clears.some((c) => c !== "five_hour");
+  return session && !other ? "session" : other && !session ? "weekly" : "full";
+}
+
 export function nextResetExpiry(credits: CodexResetCredits): string | null {
   const expiries = (credits.credits ?? [])
     .filter((c) => c.status === "available" && c.expires_at)
@@ -90,10 +133,10 @@ function windowName(seconds: number): string {
   return seconds % 86400 === 0 ? `${seconds / 86400}-day` : `${Math.round(seconds / 3600)}-hour`;
 }
 
-async function management<T>(proxy: ProxyConfig, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${proxy.url}/v8/management${path}`, {
+async function management<T>(config: LimitsConfig, path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${config.proxyUrl}/v8/management${path}`, {
     ...init,
-    headers: { Authorization: `Bearer ${proxy.managementKey}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${config.managementKey}`, "Content-Type": "application/json" },
   });
   if (!response.ok) throw new Error(`proxy ${path} returned ${response.status}`);
   return (await response.json()) as T;
@@ -101,13 +144,13 @@ async function management<T>(proxy: ProxyConfig, path: string, init?: RequestIni
 
 /** GET an upstream URL as one account; the proxy substitutes its token for $TOKEN$. */
 async function asAccount<T>(
-  proxy: ProxyConfig,
+  config: LimitsConfig,
   authIndex: string,
   url: string,
   header: Record<string, string> = {},
 ): Promise<T> {
   const { status_code, body } = await management<{ status_code: number; body: unknown }>(
-    proxy,
+    config,
     "/requests/api-call",
     {
       method: "POST",
@@ -123,28 +166,27 @@ async function asAccount<T>(
   return (typeof body === "string" ? JSON.parse(body) : body) as T;
 }
 
-async function claudeAccount(proxy: ProxyConfig, credential: Credential): Promise<AccountLimits> {
+async function claudeAccount(config: LimitsConfig, credential: Credential): Promise<AccountLimits> {
   const usage = await asAccount<ClaudeUsage>(
-    proxy,
+    config,
     credential.auth_index,
-    "https://api.anthropic.com/api/oauth/usage",
-    { "anthropic-beta": "oauth-2025-04-20" },
+    "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
+    { "anthropic-beta": "oauth-2025-04-20", "User-Agent": `claude-cli/${config.claudeCodeVersion} (external, cli)` },
   );
   return {
     label: accountLabel(credential),
     plan: null,
     limits: claudeLimits(usage),
-    resetsAvailable: null,
-    nextResetExpiry: null,
+    resets: claudeResets(usage.cedar_ember),
     error: null,
   };
 }
 
-async function codexAccount(proxy: ProxyConfig, credential: Credential): Promise<AccountLimits> {
+async function codexAccount(config: LimitsConfig, credential: Credential): Promise<AccountLimits> {
   const [usage, credits] = await Promise.all([
-    asAccount<CodexUsage>(proxy, credential.auth_index, "https://chatgpt.com/backend-api/wham/usage"),
+    asAccount<CodexUsage>(config, credential.auth_index, "https://chatgpt.com/backend-api/wham/usage"),
     asAccount<CodexResetCredits>(
-      proxy,
+      config,
       credential.auth_index,
       "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
     ),
@@ -153,34 +195,37 @@ async function codexAccount(proxy: ProxyConfig, credential: Credential): Promise
     label: accountLabel(credential),
     plan: usage.plan_type ?? null,
     limits: codexLimits(usage),
-    resetsAvailable: usage.rate_limit_reset_credits?.available_count ?? null,
-    nextResetExpiry: nextResetExpiry(credits),
+    resets: codexResets(usage, credits),
     error: null,
   };
+}
+
+function codexResets(usage: CodexUsage, credits: CodexResetCredits): Resets | null {
+  const available = usage.rate_limit_reset_credits?.available_count;
+  return available == null ? null : { available, nextExpiry: nextResetExpiry(credits), kinds: [] };
 }
 
 const accountLabel = (credential: Credential): string =>
   credential.email || credential.label || credential.auth_index;
 
-const fetchers: Record<string, (proxy: ProxyConfig, c: Credential) => Promise<AccountLimits>> = {
+const fetchers: Record<string, (config: LimitsConfig, c: Credential) => Promise<AccountLimits>> = {
   claude: claudeAccount,
   codex: codexAccount,
 };
 
 /** Limits for every enabled account the proxy knows, grouped by provider. */
-export async function fetchLimits(proxy: ProxyConfig): Promise<Map<string, AccountLimits[]>> {
-  const { files } = await management<{ files: Credential[] }>(proxy, "/credentials");
+export async function fetchLimits(config: LimitsConfig): Promise<Map<string, AccountLimits[]>> {
+  const { files } = await management<{ files: Credential[] }>(config, "/credentials");
   const accounts = await Promise.all(
     files
       .filter((c) => !c.disabled && fetchers[c.provider])
       .map(async (c) => {
-        const account = await fetchers[c.provider]!(proxy, c).catch(
+        const account = await fetchers[c.provider]!(config, c).catch(
           (error: Error): AccountLimits => ({
             label: accountLabel(c),
             plan: null,
             limits: [],
-            resetsAvailable: null,
-            nextResetExpiry: null,
+            resets: null,
             error: error.message,
           }),
         );

@@ -1,5 +1,5 @@
 import index from "./ui/index.html";
-import { fetchLimits, type ProxyConfig } from "./limits.ts";
+import { fetchLimits, type LimitsConfig } from "./limits.ts";
 import { RANGES, emptyTokens, type AccountLimits, type Range, type Summary } from "./types.ts";
 import { UsageStore, startOfToday } from "./usage.ts";
 
@@ -10,9 +10,10 @@ const MANUAL_REFRESH_MIN_MS = 30_000;
 const THIRTY_DAYS_MS = 30 * 86_400_000;
 const PROVIDER_ORDER = ["claude", "codex"];
 
-const proxy: ProxyConfig = {
-  url: process.env.PROXY_URL ?? "http://127.0.0.1:8317",
+const limitsConfig: LimitsConfig = {
+  proxyUrl: process.env.PROXY_URL ?? "http://127.0.0.1:8317",
   managementKey: await readSecret(process.env.SECRETS_FILE ?? `${HOME}/cliproxyapi/secrets.env`, "MGMT_KEY"),
+  claudeCodeVersion: process.env.CLAUDE_CODE_VERSION ?? "2.1.327",
 };
 const usage = new UsageStore(process.env.USAGE_DB ?? `${HOME}/cpamp/data/usage.sqlite`);
 
@@ -21,7 +22,7 @@ let limitsFetchedAt: Date | null = null;
 let inflight: Promise<void> | null = null;
 
 function refreshLimits(): Promise<void> {
-  inflight ??= fetchLimits(proxy)
+  inflight ??= fetchLimits(limitsConfig)
     .then((fresh) => {
       limits = fresh;
       limitsFetchedAt = new Date();
