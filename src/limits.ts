@@ -74,10 +74,9 @@ export function claudeLimits(usage: ClaudeUsage): Limit[] {
   return (usage.limits ?? []).flatMap((limit) => {
     if (limit.percent == null || !limit.resets_at) return [];
     const session = limit.group === "session";
-    const model = limit.scope?.model?.display_name;
     return [
       {
-        name: session ? "5-hour" : model ? `Weekly · ${model}` : "Weekly",
+        scope: limit.scope?.model?.display_name ?? null,
         usedPercent: limit.percent,
         resetsAt: limit.resets_at,
         windowSeconds: session ? FIVE_HOURS : ONE_WEEK,
@@ -93,7 +92,7 @@ export function codexLimits(usage: CodexUsage): Limit[] {
       w?.used_percent != null && w.limit_window_seconds && w.reset_at
         ? [
             {
-              name: windowName(w.limit_window_seconds),
+              scope: null,
               usedPercent: w.used_percent,
               resetsAt: new Date(w.reset_at * 1000).toISOString(),
               windowSeconds: w.limit_window_seconds,
@@ -107,14 +106,14 @@ export function codexLimits(usage: CodexUsage): Limit[] {
 /** Antigravity's models share limits in groups ("Gemini Models"), each with a 5-hour and/or weekly bucket. */
 export function antigravityLimits(summary: AntigravityQuotaSummary): Limit[] {
   return (summary.groups ?? []).flatMap((group) => {
-    const scope = group.displayName?.replace(/ models$/i, "");
+    const scope = group.displayName?.replace(/ models$/i, "") || null;
     return (group.buckets ?? [])
       .flatMap((bucket) => {
         const windowSeconds = ANTIGRAVITY_WINDOWS[bucket.window ?? ""];
         if (!windowSeconds || !bucket.resetTime) return [];
         return [
           {
-            name: scope ? `${windowName(windowSeconds)} · ${scope}` : windowName(windowSeconds),
+            scope,
             // Protobuf JSON omits zero values, so an exhausted bucket has no remainingFraction.
             usedPercent: (1 - (bucket.remainingFraction ?? 0)) * 100,
             resetsAt: bucket.resetTime,
@@ -158,12 +157,6 @@ export function nextResetExpiry(credits: CodexResetCredits): string | null {
     .map((c) => c.expires_at as string)
     .sort();
   return expiries[0] ?? null;
-}
-
-function windowName(seconds: number): string {
-  if (seconds === FIVE_HOURS) return "5-hour";
-  if (seconds === ONE_WEEK) return "Weekly";
-  return seconds % 86400 === 0 ? `${seconds / 86400}-day` : `${Math.round(seconds / 3600)}-hour`;
 }
 
 async function management<T>(config: LimitsConfig, path: string, init?: RequestInit): Promise<T> {

@@ -1,5 +1,6 @@
 export interface Limit {
-  name: string;
+  /** The models the limit covers ("Fable", "Gemini"); null when it covers all of them. */
+  scope: string | null;
   usedPercent: number;
   resetsAt: string;
   windowSeconds: number;

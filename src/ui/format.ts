@@ -7,6 +7,13 @@ export const tokens = (n: number): string => compact.format(n);
 export const tokensFull = (n: number): string => full.format(n);
 export const percent = (n: number): string => `${Math.round(n)}%`;
 
+/** "5-hour", "Weekly", "30-day": a limit's window as a column heading. */
+export function windowName(seconds: number): string {
+  if (seconds === 5 * 3600) return "5-hour";
+  if (seconds === 7 * 86400) return "Weekly";
+  return seconds % 86400 === 0 ? `${seconds / 86400}-day` : `${Math.round(seconds / 3600)}-hour`;
+}
+
 const time = new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" });
 const weekdayTime = new Intl.DateTimeFormat("en", { weekday: "short", hour: "numeric", minute: "2-digit" });
 const monthDay = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });

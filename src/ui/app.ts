@@ -45,93 +45,119 @@ function escape(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
-function limitHtml(limit: Limit, now: number): string {
+/** The limits table: a row per provider and model group, a column per window, then resets and tokens. */
+function limitsHtml(cards: ProviderCard[], now: number): string {
+  const windows = [...new Set(cards.flatMap((c) => c.accounts.flatMap((a) => a.limits.map((l) => l.windowSeconds))))]
+    .sort((a, b) => a - b);
+  return `
+    <table>
+      <colgroup>
+        <col class="col-provider" /><col class="col-group" />${windows.map(() => "<col />").join("")}
+        <col class="col-num" /><col class="col-num" /><col class="col-num" />
+      </colgroup>
+      <thead><tr>
+        <th></th><th></th>${windows.map((w) => `<th>${fmt.windowName(w)}</th>`).join("")}
+        <th class="num-col">Resets</th><th class="num-col">Today</th><th class="num-col">30 days</th>
+      </tr></thead>
+      ${cards.map((c) => providerRows(c, windows, now)).join("")}
+    </table>`;
+}
+
+function providerRows(card: ProviderCard, windows: number[], now: number): string {
+  const labelled = card.accounts.length > 1;
+  const rows = card.accounts.length
+    ? card.accounts.flatMap((a) => accountRows(a, labelled, windows, now))
+    : [`<td></td><td colspan="${windows.length + 1}" class="note">No limits</td>`];
+  const span = `rowspan="${rows.length}"`;
+  const plan = !labelled && card.accounts[0]?.plan ? `<span class="plan">${escape(card.accounts[0].plan)}</span>` : "";
+  const provider = `<th ${span} class="provider">${escape(providerName(card.provider))}${plan}</th>`;
+  const tokens = [card.today, card.last30Days]
+    .map((t) => `<td ${span} class="num-col" title="${tokensDetail(t)}">${fmt.tokens(totalTokens(t))}</td>`)
+    .join("");
+  return `<tbody>${rows.map((cells, i) => `<tr>${i === 0 ? provider : ""}${cells}${i === 0 ? tokens : ""}</tr>`).join("")}</tbody>`;
+}
+
+/** Cells for each of an account's rows: one per model group, unscoped ("All models") first. */
+function accountRows(account: AccountLimits, labelled: boolean, windows: number[], now: number): string[] {
+  const scopes = [...new Set(account.limits.map((l) => l.scope))].sort((a, b) => Number(a !== null) - Number(b !== null));
+  const name = `${account.label}${account.plan ? ` · ${account.plan}` : ""}`;
+  const label = labelled ? `<span class="account" title="${escape(name)}">${escape(name)}</span>` : "";
+  const note = account.error ? `Limits unavailable: ${escape(account.error)}` : scopes.length ? null : "No limits reported";
+  const rows = note
+    ? [`<td class="group">${label}</td><td colspan="${windows.length}" class="note">${note}</td>`]
+    : scopes.map((scope, i) => {
+        const group = scope ?? "All models";
+        const cells = windows.map((w) => {
+          const limit = account.limits.find((l) => l.scope === scope && l.windowSeconds === w);
+          return limit ? limitCell(limit, `${group} ${fmt.windowName(w)}`, now) : "<td></td>";
+        });
+        return `<td class="group">${escape(group)}${i === 0 ? label : ""}</td>${cells.join("")}`;
+      });
+  rows[0] += `<td rowspan="${rows.length}" class="num-col">${resetsHtml(account.resets, now)}</td>`;
+  return rows;
+}
+
+/** How much is left and when it resets, or a warning if it runs out first; the rest is on hover. */
+function limitCell(limit: Limit, name: string, now: number): string {
   const p = pace(limit, now);
-  const resetsAt = Date.parse(limit.resetsAt);
-  const left = Math.max(0, 100 - limit.usedPercent);
+  const resetsAt = fmt.moment(Date.parse(limit.resetsAt), now);
   const exhausted = limit.usedPercent >= 100;
   const overPace = !exhausted && p.runsOutAt !== null;
 
-  let estimate = '<span class="muted">too early to estimate</span>';
-  if (exhausted) estimate = `<span class="pace-warning">limit reached</span>`;
-  else if (p.runsOutAt !== null) estimate = `<span class="pace-warning">runs out ~${fmt.moment(p.runsOutAt, now)}</span>`;
-  else if (p.projectedPercent !== null) estimate = `~${fmt.percent(100 - p.projectedPercent)} left at reset`;
+  let when = resetsAt;
+  if (exhausted) when = `<span class="pace-warning">limit reached</span>`;
+  else if (p.runsOutAt !== null) when = `<span class="pace-warning">runs out ~${fmt.moment(p.runsOutAt, now)}</span>`;
+
+  const detail = [
+    `${fmt.percent(limit.usedPercent)} used`,
+    `${fmt.percent(p.elapsedFraction * 100)} through the window`,
+    `resets ${resetsAt}`,
+    exhausted || overPace ? "" : p.projectedPercent === null
+      ? "too early to estimate"
+      : `~${fmt.percent(100 - p.projectedPercent)} left at reset at this pace`,
+  ].filter(Boolean).join(" · ");
 
   return `
-    <div class="limit">
-      <div class="limit-row">
-        <span class="limit-name">${escape(limit.name)}</span>
-        <span class="num">${fmt.percent(limit.usedPercent)} used · <strong>${fmt.percent(left)} left</strong></span>
-      </div>
+    <td><div class="limit" title="${escape(detail)}">
+      <span class="limit-left num"><strong>${fmt.percent(Math.max(0, 100 - limit.usedPercent))}</strong> left</span>
       <div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${limit.usedPercent}"
-           aria-label="${escape(limit.name)} usage">
+           aria-label="${escape(name)} usage">
         <div class="meter-fill ${exhausted ? "exhausted" : overPace ? "over-pace" : ""}"
              style="width:${Math.min(limit.usedPercent, 100)}%"></div>
-        <div class="meter-elapsed" style="left:${p.elapsedFraction * 100}%" title="Window progress"></div>
+        <div class="meter-elapsed" style="left:${p.elapsedFraction * 100}%"></div>
       </div>
-      <div class="limit-row limit-detail">
-        <span class="num">${fmt.percent(p.elapsedFraction * 100)} through · resets ${fmt.moment(resetsAt, now)}</span>
-        <span class="num">${estimate}</span>
-      </div>
-    </div>`;
-}
-
-function accountHtml(account: AccountLimits, showLabel: boolean, now: number): string {
-  const head = showLabel || account.plan
-    ? `<div class="account-head"><span>${escape(account.label)}</span><span>${escape(account.plan ?? "")}</span></div>`
-    : "";
-  if (account.error) {
-    return `<div class="account">${head}<div class="account-error">Limits unavailable: ${escape(account.error)}</div></div>`;
-  }
-  const limits = account.limits.length
-    ? account.limits.map((l) => limitHtml(l, now)).join("")
-    : '<div class="account-error">No limits reported</div>';
-  return `<div class="account">${head}${limits}${resetsHtml(account.resets, now)}</div>`;
+      <span class="limit-when num">${when}</span>
+    </div></td>`;
 }
 
 const UNAVAILABLE_REASONS: Record<string, string> = {
   cli_version: "Claude Code version too old; raise CLAUDE_CODE_VERSION",
 };
 
+/** The count of resets the account can spend; what they refill and when they expire is on hover. */
 function resetsHtml(resets: Resets | null, now: number): string {
-  if (!resets) return "";
+  if (!resets) return '<span class="muted">–</span>';
   if ("unavailable" in resets) {
     const reason = UNAVAILABLE_REASONS[resets.unavailable] ?? resets.unavailable;
-    return `<div class="resets"><span>Resets available</span><span class="muted">unknown · ${escape(reason)}</span></div>`;
+    return `<span class="muted" title="Resets unknown: ${escape(reason)}">?</span>`;
   }
-  const details = [
-    resets.kinds.map((k) => `${k.count} ${escape(k.kind)}`).join(", "),
+  const detail = [
+    resets.kinds.map((k) => `${k.count} ${k.kind}`).join(", "),
     resets.nextExpiry ? `next expires ${fmt.moment(Date.parse(resets.nextExpiry), now)}` : "",
-  ].filter(Boolean);
-  return `<div class="resets"><span>Resets available</span><span class="num"><strong>${resets.available}</strong>${
-    details.length ? ` <span class="muted">· ${details.join(" · ")}</span>` : ""
-  }</span></div>`;
+  ].filter(Boolean).join(" · ");
+  return `<span title="${escape(detail)}">${resets.available}</span>`;
 }
 
-function statHtml(label: string, t: Tokens): string {
-  return `
-    <div class="stat">
-      <div class="stat-label">${label}</div>
-      <div class="stat-value num" title="${fmt.tokensFull(totalTokens(t))} tokens">${fmt.tokens(totalTokens(t))}</div>
-      <div class="stat-detail num">${fmt.tokens(t.input)} in · ${fmt.tokens(t.cacheRead + t.cacheWrite)} cache · ${fmt.tokens(t.output)} out</div>
-    </div>`;
-}
-
-function cardHtml(card: ProviderCard, now: number): string {
-  const multiple = card.accounts.length > 1;
-  return `
-    <article class="panel card">
-      <div class="card-head"><h2>${escape(providerName(card.provider))}</h2></div>
-      <div class="stats">${statHtml("Today", card.today)}${statHtml("Last 30 days", card.last30Days)}</div>
-      ${card.accounts.map((a) => accountHtml(a, multiple, now)).join("")}
-    </article>`;
-}
+const tokensDetail = (t: Tokens) =>
+  `${fmt.tokensFull(totalTokens(t))} tokens: ${fmt.tokens(t.input)} in · ${fmt.tokens(t.cacheRead + t.cacheWrite)} cache · ${fmt.tokens(t.output)} out`;
 
 function renderSummary(): void {
   const summary = state.summary;
   if (!summary) return;
   const now = Date.now();
-  $("cards").innerHTML = summary.providers.map((c) => cardHtml(c, now)).join("");
+  const limits = $("limits");
+  limits.hidden = summary.providers.length === 0;
+  limits.innerHTML = limitsHtml(summary.providers, now);
   $("updated").textContent = summary.limitsFetchedAt
     ? `Limits updated ${fmt.ago(Date.parse(summary.limitsFetchedAt), now)}`
     : "Limits not loaded yet";

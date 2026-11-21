@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { antigravityLimits, claudeLimits, claudeResets, codexLimits, nextResetExpiry } from "../src/limits.ts";
 
 describe("claudeLimits", () => {
-  test("names the session, weekly, and model-scoped weekly limits", () => {
+  test("reads the session, weekly, and model-scoped weekly limits", () => {
     const limits = claudeLimits({
       limits: [
         { kind: "session", group: "session", percent: 11, resets_at: "2026-11-19T19:09:59Z", scope: null },
@@ -11,10 +11,10 @@ describe("claudeLimits", () => {
           scope: { model: { display_name: "Fable" } } },
       ],
     });
-    expect(limits.map((l) => [l.name, l.usedPercent, l.windowSeconds])).toEqual([
-      ["5-hour", 11, 18000],
-      ["Weekly", 10, 604800],
-      ["Weekly · Fable", 0, 604800],
+    expect(limits.map((l) => [l.scope, l.usedPercent, l.windowSeconds])).toEqual([
+      [null, 11, 18000],
+      [null, 10, 604800],
+      ["Fable", 0, 604800],
     ]);
   });
 });
@@ -51,12 +51,12 @@ describe("codexLimits", () => {
   test("reads both windows shortest first and skips missing ones", () => {
     const weekly = { used_percent: 30, limit_window_seconds: 604800, reset_at: 1795706019 };
     expect(codexLimits({ rate_limit: { primary_window: weekly, secondary_window: null } })).toEqual([
-      { name: "Weekly", usedPercent: 30, resetsAt: new Date(1795706019000).toISOString(), windowSeconds: 604800 },
+      { scope: null, usedPercent: 30, resetsAt: new Date(1795706019000).toISOString(), windowSeconds: 604800 },
     ]);
 
     const session = { used_percent: 5, limit_window_seconds: 18000, reset_at: 1795600000 };
-    expect(codexLimits({ rate_limit: { primary_window: weekly, secondary_window: session } }).map((l) => l.name))
-      .toEqual(["5-hour", "Weekly"]);
+    expect(codexLimits({ rate_limit: { primary_window: weekly, secondary_window: session } }).map((l) => l.windowSeconds))
+      .toEqual([18000, 604800]);
   });
 });
 
@@ -75,7 +75,7 @@ describe("antigravityLimits", () => {
   const fiveHour = "2026-11-21T04:42:12Z";
   const weekly = "2026-11-27T23:42:12Z";
 
-  test("names each group's buckets, 5-hour first", () => {
+  test("scopes each group's buckets to the group, 5-hour first", () => {
     const limits = antigravityLimits({
       groups: [
         {
@@ -88,10 +88,10 @@ describe("antigravityLimits", () => {
         { displayName: "Gemini 4 Argon", buckets: [{ window: "weekly", remainingFraction: 1, resetTime: weekly }] },
       ],
     });
-    expect(limits.map((l) => [l.name, l.usedPercent, l.windowSeconds])).toEqual([
-      ["5-hour · Gemini", 60, 18000],
-      ["Weekly · Gemini", 25, 604800],
-      ["Weekly · Gemini 4 Argon", 0, 604800],
+    expect(limits.map((l) => [l.scope, l.usedPercent, l.windowSeconds])).toEqual([
+      ["Gemini", 60, 18000],
+      ["Gemini", 25, 604800],
+      ["Gemini 4 Argon", 0, 604800],
     ]);
   });
 
@@ -99,6 +99,6 @@ describe("antigravityLimits", () => {
     const limits = antigravityLimits({
       groups: [{ displayName: "Claude and GPT models", buckets: [{ window: "5h", resetTime: fiveHour }] }],
     });
-    expect(limits.map((l) => [l.name, l.usedPercent])).toEqual([["5-hour · Claude and GPT", 100]]);
+    expect(limits.map((l) => [l.scope, l.usedPercent])).toEqual([["Claude and GPT", 100]]);
   });
 });

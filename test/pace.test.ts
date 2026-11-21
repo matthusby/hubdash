@@ -4,7 +4,7 @@ import { pace } from "../src/pace.ts";
 const HOUR = 3_600_000;
 const now = Date.parse("2026-11-19T12:00:00Z");
 const fiveHour = (usedPercent: number, resetsInHours: number) => ({
-  name: "5-hour",
+  scope: null,
   usedPercent,
   resetsAt: new Date(now + resetsInHours * HOUR).toISOString(),
   windowSeconds: 5 * 3600,

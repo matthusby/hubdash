@@ -6,16 +6,16 @@ where your tokens went.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <img alt="hubdash showing Claude and Codex limit cards above a token usage chart stacked by model" src="docs/screenshot-light.png">
+  <img alt="hubdash showing a table of Claude, Codex, and Antigravity limits above a token usage chart" src="docs/screenshot-light.png">
 </picture>
 
 ## What it shows
 
-- **A card per provider**: tokens today and over the last 30 days, then each limit (5-hour, weekly, Claude's
-  per-model weekly, Antigravity's 5-hour and weekly per model group). For each one: how much is left, how far through the window you are, when it resets, and a
-  pace estimate: what you'll have left at reset, or roughly when you'll run out.
-- **Resets available** for both providers, with the next expiry. Claude's are split by what they refill
-  (full, Fable, …).
+- **A limits table**: a row per provider and model group (Claude's Fable, Antigravity's Gemini, …), a column
+  per window (5-hour, weekly). Each cell shows how much is left, how far through the window you are, and when it
+  resets, or a warning if you're on pace to run out first. Hover a cell for usage and a pace estimate.
+- **Resets available** and **tokens** today and over the last 30 days, at the end of each provider's rows. Hover
+  for what the resets refill and when they expire, or for the token breakdown.
 - **Token usage over time** for a day, week, month, or 6 months. Filter by provider or model, stack by token
   type (input, cache read, cache write, output) or by model, or switch to a table.
 
