@@ -68,7 +68,35 @@ interface AntigravityQuotaSummary {
   }[] | null;
 }
 
+/** An openai-compatibility provider as the proxy's config endpoint lists it, with each key's auth-index. */
+interface OpenAICompatibility {
+  name?: string | null;
+  disabled?: boolean;
+  "api-key-entries"?: { "auth-index"?: string | null }[] | null;
+}
+
+/** Z.ai's response as returned: an envelope holding the coding plan's tier and a token limit per window. */
+interface ZaiQuota {
+  data?: {
+    level?: string | null;
+    limits?: {
+      type?: string | null;
+      /** 3 = hours, 5 = months, 6 = weeks. */
+      unit?: number | null;
+      /** How many of the unit the window spans. */
+      number?: number | null;
+      percentage?: number | null;
+      /** Epoch milliseconds. */
+      nextResetTime?: number | null;
+    }[] | null;
+  } | null;
+}
+
 const ANTIGRAVITY_WINDOWS: Record<string, number> = { "5h": FIVE_HOURS, weekly: ONE_WEEK };
+
+/** Z.ai's token windows by `unit`: `number` hours, or its 7-day week. The monthly limit counts MCP calls, not tokens,
+ * so it stays out. */
+const ZAI_WINDOW_SECONDS: Record<number, (number: number) => number> = { 3: (hours) => hours * 3600, 6: () => ONE_WEEK };
 
 export function claudeLimits(usage: ClaudeUsage): Limit[] {
   return (usage.limits ?? []).flatMap((limit) => {
@@ -125,6 +153,43 @@ export function antigravityLimits(summary: AntigravityQuotaSummary): Limit[] {
   });
 }
 
+/** A Z.ai coding plan's token limits (5-hour, weekly) are shared by all its models. */
+export function zaiLimits(quota: ZaiQuota): Limit[] {
+  return (quota.data?.limits ?? [])
+    .flatMap((limit) => {
+      const window = limit.type === "TOKENS_LIMIT" ? ZAI_WINDOW_SECONDS[limit.unit ?? -1] : undefined;
+      if (!window || limit.percentage == null || !limit.nextResetTime) return [];
+      return [
+        {
+          scope: null,
+          usedPercent: limit.percentage,
+          resetsAt: new Date(limit.nextResetTime).toISOString(),
+          windowSeconds: window(limit.number ?? 1),
+        },
+      ];
+    })
+    .sort((a, b) => a.windowSeconds - b.windowSeconds);
+}
+
+/** One credential per enabled key, under the provider name the proxy routes and the usage log record it by. */
+export function compatCredentials(entries: OpenAICompatibility[]): Credential[] {
+  return entries.flatMap((entry) =>
+    entry.disabled
+      ? []
+      : (entry["api-key-entries"] ?? []).flatMap((key) =>
+          key["auth-index"]
+            ? [
+                {
+                  provider: `openai-compatible-${(entry.name ?? "").trim().toLowerCase()}`,
+                  auth_index: key["auth-index"],
+                  label: entry.name ?? undefined,
+                },
+              ]
+            : [],
+        ),
+  );
+}
+
 /** Unspent, unexpired reset grants, counted by what they refill. */
 export function claudeResets(grants: ClaudeResetGrants | null | undefined, now: number = Date.now()): Resets | null {
   if (!grants) return null;
@@ -159,8 +224,9 @@ export function nextResetExpiry(credits: CodexResetCredits): string | null {
   return expiries[0] ?? null;
 }
 
+/** Call the proxy's management API at `path`, version included: not every route exists on both /v0 and /v8. */
 async function management<T>(config: LimitsConfig, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${config.proxyUrl}/v8/management${path}`, {
+  const response = await fetch(`${config.proxyUrl}${path}`, {
     ...init,
     headers: { Authorization: `Bearer ${config.managementKey}`, "Content-Type": "application/json" },
   });
@@ -177,7 +243,7 @@ async function asAccount<T>(
 ): Promise<T> {
   const { status_code, body } = await management<{ status_code: number; body: unknown }>(
     config,
-    "/requests/api-call",
+    "/v8/management/requests/api-call",
     {
       method: "POST",
       body: JSON.stringify({
@@ -247,6 +313,18 @@ async function antigravityAccount(config: LimitsConfig, credential: Credential):
   };
 }
 
+/** Z.ai's coding plan reports a token limit per window and the plan's tier. */
+async function zaiAccount(config: LimitsConfig, credential: Credential): Promise<AccountLimits> {
+  const quota = await asAccount<ZaiQuota>(config, credential.auth_index, "https://api.z.ai/api/monitor/usage/quota/limit");
+  return {
+    label: accountLabel(credential),
+    plan: quota.data?.level ?? null,
+    limits: zaiLimits(quota),
+    resets: null,
+    error: null,
+  };
+}
+
 function codexResets(usage: CodexUsage, credits: CodexResetCredits): Resets | null {
   const available = usage.rate_limit_reset_credits?.available_count;
   return available == null ? null : { available, nextExpiry: nextResetExpiry(credits), kinds: [] };
@@ -255,17 +333,35 @@ function codexResets(usage: CodexUsage, credits: CodexResetCredits): Resets | nu
 const accountLabel = (credential: Credential): string =>
   credential.email || credential.label || credential.auth_index;
 
+/** Keys configured under openai-compatibility. The credentials listing only covers auth files, so these come from
+ * the config endpoint, which also gives each key the auth-index that api-call needs. */
+async function compatKeys(config: LimitsConfig): Promise<Credential[]> {
+  const listing = await management<{ "openai-compatibility"?: OpenAICompatibility[] }>(
+    config,
+    "/v0/management/openai-compatibility",
+  );
+  return compatCredentials(listing["openai-compatibility"] ?? []);
+}
+
 const fetchers: Record<string, (config: LimitsConfig, c: Credential) => Promise<AccountLimits>> = {
   claude: claudeAccount,
   codex: codexAccount,
   antigravity: antigravityAccount,
+  "openai-compatible-zai-coding-plan": zaiAccount,
 };
 
 /** Limits for every enabled account the proxy knows, grouped by provider. */
 export async function fetchLimits(config: LimitsConfig): Promise<Map<string, AccountLimits[]>> {
-  const { files } = await management<{ files: Credential[] }>(config, "/credentials");
+  const [{ files }, compat] = await Promise.all([
+    management<{ files: Credential[] }>(config, "/v8/management/credentials"),
+    // Losing these keys must not stall the auth-file accounts' limits too.
+    compatKeys(config).catch((error: Error): Credential[] => {
+      console.error(`openai-compatibility keys unavailable: ${error.message}`);
+      return [];
+    }),
+  ]);
   const accounts = await Promise.all(
-    files
+    [...files, ...compat]
       .filter((c) => !c.disabled && fetchers[c.provider])
       .map(async (c) => {
         const account = await fetchers[c.provider]!(config, c).catch(

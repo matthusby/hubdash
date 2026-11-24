@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { antigravityLimits, claudeLimits, claudeResets, codexLimits, nextResetExpiry } from "../src/limits.ts";
+import {
+  antigravityLimits,
+  claudeLimits,
+  claudeResets,
+  codexLimits,
+  compatCredentials,
+  nextResetExpiry,
+  zaiLimits,
+} from "../src/limits.ts";
 
 describe("claudeLimits", () => {
   test("reads the session, weekly, and model-scoped weekly limits", () => {
@@ -101,4 +109,50 @@ describe("antigravityLimits", () => {
     });
     expect(limits.map((l) => [l.scope, l.usedPercent])).toEqual([["Claude and GPT", 100]]);
   });
+});
+
+describe("zaiLimits", () => {
+  const quota = {
+    code: 200,
+    msg: "Operation successful",
+    data: {
+      level: "pro",
+      limits: [
+        { type: "TIME_LIMIT", unit: 5, number: 1, usage: 1000, currentValue: 0, percentage: 0, nextResetTime: 1796269604999 },
+        { type: "TOKENS_LIMIT", unit: 6, number: 7, percentage: 4, nextResetTime: 1796086800000 },
+        { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 21, nextResetTime: 1795485646320 },
+      ],
+    },
+    success: true,
+  };
+
+  test("reads the token windows shortest first and leaves out the monthly MCP call limit", () => {
+    expect(zaiLimits(quota)).toEqual([
+      { scope: null, usedPercent: 21, resetsAt: new Date(1795485646320).toISOString(), windowSeconds: 18000 },
+      { scope: null, usedPercent: 4, resetsAt: new Date(1796086800000).toISOString(), windowSeconds: 604800 },
+    ]);
+  });
+
+  test("skips a window with no percentage or reset time", () => {
+    const data = {
+      limits: [
+        { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 12 },
+        { type: "TOKENS_LIMIT", unit: 3, number: 5, nextResetTime: 1795485646320 },
+      ],
+    };
+    expect(zaiLimits({ data })).toEqual([]);
+  });
+});
+
+test("compatCredentials addresses each enabled key under the name the proxy routes it by, without its key", () => {
+  const entries = [
+    {
+      name: "ZAI Coding Plan",
+      "api-key-entries": [{ "api-key": "sk-secret", "auth-index": "index-1" }, { "api-key": "sk-secret" }],
+    },
+    { name: "other", disabled: true, "api-key-entries": [{ "auth-index": "index-2" }] },
+  ];
+  expect(compatCredentials(entries)).toEqual([
+    { provider: "openai-compatible-zai coding plan", auth_index: "index-1", label: "ZAI Coding Plan" },
+  ]);
 });

@@ -1,6 +1,6 @@
 # hubdash
 
-A small new-tab dashboard for Claude, Codex, and Antigravity subscriptions routed through
+A small new-tab dashboard for Claude, Codex, Antigravity, and Z.ai subscriptions routed through
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). It shows how much of each rate limit is left and
 where your tokens went.
 
@@ -24,12 +24,15 @@ where your tokens went.
 One Bun binary serves the page and a small JSON API:
 
 - **Limits** come from each provider's usage endpoint, called through CLIProxyAPI's management API
-  (`/v8/management/requests/api-call`), so the proxy supplies the account's OAuth token. They're refreshed every 5 minutes.
+  (`/v8/management/requests/api-call`), so the proxy supplies the account's OAuth token or API key. They're refreshed every 5 minutes.
+  Accounts are listed by `/v8/management/credentials`; keys configured under `openai-compatibility` aren't in that listing,
+  so their auth-index comes from `/v0/management/openai-compatibility`.
 - **Token usage** is read from the SQLite database kept by
   [CPA-Manager-Plus](https://github.com/seakee/CPA-Manager-Plus) (`usage_events`).
 
 The usage endpoints (`api.anthropic.com/api/oauth/usage`, `chatgpt.com/backend-api/wham/usage`,
-`cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`) are undocumented and may change. If one fails, that account shows "Limits unavailable" and the rest of the page keeps working.
+`cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, `api.z.ai/api/monitor/usage/quota/limit`) are
+undocumented and may change. If one fails, that account shows "Limits unavailable" and the rest of the page keeps working.
 
 ## Requirements
 
