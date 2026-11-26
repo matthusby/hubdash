@@ -5,7 +5,6 @@ import {
   claudeResets,
   codexLimits,
   compatCredentials,
-  nextResetExpiry,
   zaiLimits,
 } from "../src/limits.ts";
 
@@ -32,7 +31,7 @@ describe("claudeResets", () => {
   const full = { type: "full", resets_left: 1, ends_at: "2026-12-10T22:00:00Z", clears: ["five_hour", "seven_day"] };
   const fable = { type: "full", resets_left: 1, ends_at: "2027-03-09T07:59:00Z", gives_back_weekly: true };
 
-  test("counts unspent, unexpired grants by what they refill", () => {
+  test("counts unspent, unexpired grants by what they refill, soonest expiry first", () => {
     const grants = [
       full,
       fable,
@@ -43,8 +42,25 @@ describe("claudeResets", () => {
     ];
     expect(claudeResets({ eligible: true, grants }, now)).toEqual({
       available: 5,
-      nextExpiry: "2026-12-01T00:00:00Z",
-      kinds: [{ kind: "full", count: 1 }, { kind: "Fable", count: 3 }, { kind: "session", count: 1 }],
+      grants: [
+        { kind: "session", count: 1, expiresAt: "2026-12-01T00:00:00Z" },
+        { kind: "full", count: 1, expiresAt: "2026-12-10T22:00:00Z" },
+        { kind: "Fable", count: 3, expiresAt: "2027-03-09T07:59:00Z" },
+      ],
+    });
+  });
+
+  test("keeps same-kind grants with different expiries separate", () => {
+    const grants = [
+      { resets_left: 1, ends_at: "2026-12-15T00:00:00Z", clears: ["five_hour"] },
+      { resets_left: 1, ends_at: "2026-12-01T00:00:00Z", clears: ["five_hour"] },
+    ];
+    expect(claudeResets({ eligible: true, grants }, now)).toEqual({
+      available: 2,
+      grants: [
+        { kind: "session", count: 1, expiresAt: "2026-12-01T00:00:00Z" },
+        { kind: "session", count: 1, expiresAt: "2026-12-15T00:00:00Z" },
+      ],
     });
   });
 
@@ -66,17 +82,6 @@ describe("codexLimits", () => {
     expect(codexLimits({ rate_limit: { primary_window: weekly, secondary_window: session } }).map((l) => l.windowSeconds))
       .toEqual([18000, 604800]);
   });
-});
-
-test("nextResetExpiry picks the soonest available credit", () => {
-  expect(nextResetExpiry({
-    credits: [
-      { status: "available", expires_at: "2026-12-12T22:43:43Z" },
-      { status: "redeemed", expires_at: "2026-11-20T00:00:00Z" },
-      { status: "available", expires_at: "2026-11-30T20:19:35Z" },
-    ],
-  })).toBe("2026-11-30T20:19:35Z");
-  expect(nextResetExpiry({ credits: [] })).toBeNull();
 });
 
 describe("antigravityLimits", () => {

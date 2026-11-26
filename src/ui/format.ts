@@ -17,6 +17,7 @@ export function windowName(seconds: number): string {
 const time = new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" });
 const weekdayTime = new Intl.DateTimeFormat("en", { weekday: "short", hour: "numeric", minute: "2-digit" });
 const monthDay = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
+const stampFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
 
 /** "1:09 PM" today, "Tue 9:00 AM" within a week, otherwise "Nov 25". */
 export function moment(ms: number, now: number = Date.now()): string {
@@ -25,6 +26,9 @@ export function moment(ms: number, now: number = Date.now()): string {
   if (Math.abs(days) < 6.5) return weekdayTime.format(ms);
   return monthDay.format(ms);
 }
+
+/** "Dec 1, 2026, 12:00 AM": the absolute date and time, where moment's is relative. */
+export const stamp = (ms: number): string => stampFormat.format(ms);
 
 export function ago(ms: number, now: number = Date.now()): string {
   const minutes = Math.round((now - ms) / 60_000);

@@ -98,7 +98,7 @@ function accountRows(account: AccountLimits, labelled: boolean, windows: number[
         });
         return `<td class="group">${escape(group)}${i === 0 ? label : ""}</td>${cells.join("")}`;
       });
-  rows[0] += `<td rowspan="${rows.length}" class="num-col">${resetsHtml(account.resets, now)}</td>`;
+  rows[0] += `<td rowspan="${rows.length}" class="num-col">${resetsHtml(account.resets)}</td>`;
   return rows;
 }
 
@@ -139,17 +139,16 @@ const UNAVAILABLE_REASONS: Record<string, string> = {
   cli_version: "Claude Code version too old; raise CLAUDE_CODE_VERSION",
 };
 
-/** The count of resets the account can spend; what they refill and when they expire is on hover. */
-function resetsHtml(resets: Resets | null, now: number): string {
+/** The count of resets the account can spend; what each batch refills and when it expires is on hover. */
+function resetsHtml(resets: Resets | null): string {
   if (!resets) return '<span class="muted">–</span>';
   if ("unavailable" in resets) {
     const reason = UNAVAILABLE_REASONS[resets.unavailable] ?? resets.unavailable;
     return `<span class="muted" title="Resets unknown: ${escape(reason)}">?</span>`;
   }
-  const detail = [
-    resets.kinds.map((k) => `${k.count} ${k.kind}`).join(", "),
-    resets.nextExpiry ? `next expires ${fmt.moment(Date.parse(resets.nextExpiry), now)}` : "",
-  ].filter(Boolean).join(" · ");
+  const detail = resets.grants
+    .map((g) => `${g.count}× ${g.kind}${g.expiresAt ? ` · expires ${fmt.stamp(Date.parse(g.expiresAt))}` : ""}`)
+    .join("\n");
   return `<span title="${escape(detail)}">${resets.available}</span>`;
 }
 

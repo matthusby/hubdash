@@ -14,9 +14,10 @@ export interface AccountLimits {
   error: string | null;
 }
 
-/** Limit resets the account can spend, or why the provider won't say. */
+/** Limit resets the account can spend, or why the provider won't say. A grant batch shares a kind and expiry;
+ * batches are sorted soonest expiry first. */
 export type Resets =
-  | { available: number; nextExpiry: string | null; kinds: { kind: string; count: number }[] }
+  | { available: number; grants: { kind: string; count: number; expiresAt: string | null }[] }
   | { unavailable: string };
 
 export interface Tokens {

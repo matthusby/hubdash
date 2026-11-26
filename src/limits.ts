@@ -190,20 +190,24 @@ export function compatCredentials(entries: OpenAICompatibility[]): Credential[] 
   );
 }
 
-/** Unspent, unexpired reset grants, counted by what they refill. */
+/** Unspent, unexpired reset grants, batched by what they refill and when they expire, soonest expiry first. */
 export function claudeResets(grants: ClaudeResetGrants | null | undefined, now: number = Date.now()): Resets | null {
   if (!grants) return null;
   if (!grants.eligible) return { unavailable: grants.ineligible_reason ?? "not eligible" };
-  const live = (grants.grants ?? []).filter(
-    (g) => (g.resets_left ?? 0) > 0 && !(g.ends_at && Date.parse(g.ends_at) <= now),
+  const batches = new Map<string, { kind: string; count: number; expiresAt: string | null }>();
+  for (const grant of grants.grants ?? []) {
+    if ((grant.resets_left ?? 0) <= 0 || (grant.ends_at && Date.parse(grant.ends_at) <= now)) continue;
+    const kind = grantKind(grant);
+    const key = `${kind} ${grant.ends_at ?? ""}`;
+    const batch = batches.get(key) ?? { kind, count: 0, expiresAt: grant.ends_at ?? null };
+    batch.count += grant.resets_left!;
+    batches.set(key, batch);
+  }
+  const live = [...batches.values()].sort(
+    (a, b) =>
+      (a.expiresAt ? Date.parse(a.expiresAt) : Infinity) - (b.expiresAt ? Date.parse(b.expiresAt) : Infinity),
   );
-  const counts = new Map<string, number>();
-  for (const grant of live) counts.set(grantKind(grant), (counts.get(grantKind(grant)) ?? 0) + grant.resets_left!);
-  return {
-    available: live.reduce((sum, g) => sum + g.resets_left!, 0),
-    nextExpiry: live.flatMap((g) => (g.ends_at ? [g.ends_at] : [])).sort()[0] ?? null,
-    kinds: [...counts].map(([kind, count]) => ({ kind, count })),
-  };
+  return { available: live.reduce((sum, g) => sum + g.count, 0), grants: live };
 }
 
 /** A grant that gives back the week's Fable use is a Fable reset whatever its type says, as in Claude Code. */
@@ -214,14 +218,6 @@ function grantKind(grant: ClaudeResetGrant): string {
   const session = clears.includes("five_hour");
   const other = clears.some((c) => c !== "five_hour");
   return session && !other ? "session" : other && !session ? "weekly" : "full";
-}
-
-export function nextResetExpiry(credits: CodexResetCredits): string | null {
-  const expiries = (credits.credits ?? [])
-    .filter((c) => c.status === "available" && c.expires_at)
-    .map((c) => c.expires_at as string)
-    .sort();
-  return expiries[0] ?? null;
 }
 
 /** Call the proxy's management API at `path`, version included: not every route exists on both /v0 and /v8. */
@@ -325,9 +321,17 @@ async function zaiAccount(config: LimitsConfig, credential: Credential): Promise
   };
 }
 
+/** Codex's credits, batched by expiry date; the count comes from usage, which is the authoritative one. */
 function codexResets(usage: CodexUsage, credits: CodexResetCredits): Resets | null {
   const available = usage.rate_limit_reset_credits?.available_count;
-  return available == null ? null : { available, nextExpiry: nextResetExpiry(credits), kinds: [] };
+  if (available == null) return null;
+  const counts = new Map<string, number>();
+  for (const credit of credits.credits ?? []) {
+    if (credit.status !== "available" || !credit.expires_at) continue;
+    counts.set(credit.expires_at, (counts.get(credit.expires_at) ?? 0) + 1);
+  }
+  const grants = [...counts.entries()].sort().map(([expiresAt, count]) => ({ kind: "credit", count, expiresAt }));
+  return { available, grants };
 }
 
 const accountLabel = (credential: Credential): string =>

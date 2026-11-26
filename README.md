@@ -15,7 +15,7 @@ where your tokens went.
   per window (5-hour, weekly). Each cell shows how much is left, how far through the window you are, and when it
   resets, or a warning if you're on pace to run out first. Hover a cell for usage and a pace estimate.
 - **Resets available** and **tokens** today and over the last 30 days, at the end of each provider's rows. Hover
-  for what the resets refill and when they expire, or for the token breakdown.
+  for what each reset refills and when it expires, or for the token breakdown.
 - **Token usage over time** for a day, week, month, or 6 months. Filter by provider or model, stack by token
   type (input, cache read, cache write, output) or by model, or switch to a table.
 
