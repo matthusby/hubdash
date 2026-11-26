@@ -110,7 +110,7 @@ function accountRows(account: AccountLimits, labelled: boolean, windows: number[
 /** A ring shows how much is used with a tick for how far through the window it is; the rest is on hover.
  *  When the limit won't last until reset, the run-out estimate sits beside the reset time. */
 function limitCell(limit: Limit, name: string, now: number, animate: boolean): string {
-  const p = pace(limit, now, limit.trend ?? null);
+  const p = pace(limit, now);
   const resetsAt = fmt.moment(Date.parse(limit.resetsAt), now);
   const used = Math.min(limit.usedPercent, 100);
   const exhausted = limit.usedPercent >= 100;
@@ -126,10 +126,9 @@ function limitCell(limit: Limit, name: string, now: number, animate: boolean): s
     `${fmt.percent(limit.usedPercent)} used`,
     `${fmt.percent(p.elapsedFraction * 100)} through the window`,
     `resets ${resetsAt}`,
-    p.trendRate !== null ? `burning ~${p.trendRate.toFixed(1)}%/h recently` : "",
     exhausted || overPace ? "" : p.projectedPercent === null
       ? "too early to estimate"
-      : `~${fmt.percent(100 - p.projectedPercent)} left at reset ${p.fromTrend ? "at the recent rate" : "at this pace"}`,
+      : `~${fmt.percent(100 - p.projectedPercent)} left at reset at this pace`,
   ].filter(Boolean).join(" · ");
 
   const sweep = animate ? ` style="stroke-dashoffset:${used}"` : "";

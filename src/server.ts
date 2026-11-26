@@ -1,7 +1,6 @@
 import index from "./ui/index.html";
 import { fetchLimits, type LimitsConfig } from "./limits.ts";
-import { pace, trendOf } from "./pace.ts";
-import { RANGES, emptyTokens, totalTokens, type AccountLimits, type Limit, type Range, type Summary } from "./types.ts";
+import { RANGES, emptyTokens, totalTokens, type AccountLimits, type Range, type Summary } from "./types.ts";
 import { UsageStore, bucketStarts, startOfToday } from "./usage.ts";
 
 const HOME = process.env.HOME ?? "";
@@ -11,7 +10,6 @@ const MANUAL_REFRESH_MIN_MS = 30_000;
 const THIRTY_DAYS_MS = 30 * 86_400_000;
 const HISTORY_MS = 52 * 7 * 86_400_000;
 const WEEK_MS = 7 * 86_400_000;
-const TREND_KEEP_MS = 12 * 3_600_000;
 const PROVIDER_ORDER = ["claude", "codex"];
 
 const limitsConfig: LimitsConfig = {
@@ -26,33 +24,9 @@ let limits = new Map<string, AccountLimits[]>();
 let limitsFetchedAt: Date | null = null;
 let inflight: Promise<void> | null = null;
 
-/** Used-percent readings per limit, so a recent burn rate can be estimated. */
-const trendSamples = new Map<string, { t: number; used: number }[]>();
-const trendKey = (provider: string, label: string, limit: Limit) =>
-  `${provider}|${label}|${limit.scope ?? ""}|${limit.windowSeconds}`;
-
-function recordTrends(fresh: Map<string, AccountLimits[]>): void {
-  const now = Date.now();
-  for (const [provider, accounts] of fresh) {
-    for (const account of accounts) {
-      for (const limit of account.limits) {
-        const key = trendKey(provider, account.label, limit);
-        let samples = trendSamples.get(key);
-        if (!samples) trendSamples.set(key, (samples = []));
-        samples.push({ t: now, used: limit.usedPercent });
-        while (samples.length > 1 && now - samples[0]!.t > TREND_KEEP_MS) samples.shift();
-      }
-    }
-  }
-}
-
-const trendFor = (provider: string, label: string, limit: Limit, now: number) =>
-  trendOf(trendSamples.get(trendKey(provider, label, limit)) ?? [], now);
-
 function refreshLimits(): Promise<void> {
   inflight ??= fetchLimits(limitsConfig)
     .then((fresh) => {
-      recordTrends(fresh);
       limits = fresh;
       limitsFetchedAt = new Date();
     })
@@ -72,10 +46,7 @@ function summary(): Summary {
   return {
     providers: providers.map((provider) => ({
       provider,
-      accounts: (limits.get(provider) ?? []).map((account) => ({
-        ...account,
-        limits: account.limits.map((limit) => ({ ...limit, trend: trendFor(provider, account.label, limit, now) })),
-      })),
+      accounts: limits.get(provider) ?? [],
       today: today.get(provider) ?? emptyTokens(),
       last30Days: last30Days.get(provider) ?? emptyTokens(),
     })),

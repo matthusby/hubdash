@@ -4,13 +4,6 @@ export interface Limit {
   usedPercent: number;
   resetsAt: string;
   windowSeconds: number;
-  /** How fast this limit has been burning recently, in percent of the window per hour; null when unknown. */
-  trend?: Trend | null;
-}
-
-/** Observed recent burn rate of a limit, from consecutive usage samples. */
-export interface Trend {
-  percentPerHour: number;
 }
 
 export interface AccountLimits {
