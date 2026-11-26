@@ -56,6 +56,7 @@ export function renderChart(
   size: BucketSize,
   emptyMessage: string,
   onHover: (index: number | null, event?: MouseEvent) => void,
+  animate = false,
 ): void {
   container.replaceChildren();
   const width = container.clientWidth;
@@ -99,6 +100,8 @@ export function renderChart(
     svg.append(hit);
 
     const visible = series.filter((s) => (point.values[s.key] ?? 0) > 0);
+    const bar = el("g", { class: animate ? "bar enter" : "bar" });
+    if (animate) bar.setAttribute("style", `animation-delay:${Math.min(i * 25, 400)}ms`);
     let base = 0;
     visible.forEach(({ key, color: fill }, j) => {
       const value = point.values[key] ?? 0;
@@ -112,8 +115,9 @@ export function renderChart(
         ? el("path", { d: capPath(x, y1, barW, h), fill })
         : el("rect", { x, y: y1 + SEGMENT_GAP, width: barW, height: h, fill });
       segment.setAttribute("pointer-events", "none");
-      svg.append(segment);
+      bar.append(segment);
     });
+    svg.append(bar);
 
     if (i % labelEvery === 0) {
       const label = el("text", { class: "axis", x: bandX + band / 2, y: height - 6, "text-anchor": "middle" });

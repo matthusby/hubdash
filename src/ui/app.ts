@@ -4,6 +4,7 @@ import {
   totalTokens,
   type AccountLimits,
   type Bucket,
+  type DayTotal,
   type Limit,
   type ProviderCard,
   type Range,
@@ -31,6 +32,7 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const state = {
   summary: null as Summary | null,
   series: null as UsageSeries | null,
+  history: null as DayTotal[] | null,
   range: (localStorage.getItem("range") as Range | null) ?? "week",
   provider: localStorage.getItem("provider") ?? "all",
   view: localStorage.getItem("view") ?? "chart",
@@ -38,6 +40,9 @@ const state = {
   model: localStorage.getItem("model") ?? "all",
   stack: localStorage.getItem("stack") ?? "type",
 };
+
+/** Entrance animations run on the first paint only; later polls re-render silently. */
+let entered = { limits: false, stats: false, chart: false };
 
 function setModel(model: string): void {
   state.model = model;
@@ -51,7 +56,7 @@ function escape(s: string): string {
 }
 
 /** The limits table: a row per provider and model group, a column per window, then resets and tokens. */
-function limitsHtml(cards: ProviderCard[], now: number): string {
+function limitsHtml(cards: ProviderCard[], now: number, animate: boolean): string {
   const windows = [...new Set(cards.flatMap((c) => c.accounts.flatMap((a) => a.limits.map((l) => l.windowSeconds))))]
     .sort((a, b) => a - b);
   return `
@@ -64,14 +69,14 @@ function limitsHtml(cards: ProviderCard[], now: number): string {
         <th></th><th></th>${windows.map((w) => `<th>${fmt.windowName(w)}</th>`).join("")}
         <th class="num-col">Resets</th><th class="num-col">Today</th><th class="num-col">30 days</th>
       </tr></thead>
-      ${cards.map((c) => providerRows(c, windows, now)).join("")}
+      ${cards.map((c) => providerRows(c, windows, now, animate)).join("")}
     </table>`;
 }
 
-function providerRows(card: ProviderCard, windows: number[], now: number): string {
+function providerRows(card: ProviderCard, windows: number[], now: number, animate: boolean): string {
   const labelled = card.accounts.length > 1;
   const rows = card.accounts.length
-    ? card.accounts.flatMap((a) => accountRows(a, labelled, windows, now))
+    ? card.accounts.flatMap((a) => accountRows(a, labelled, windows, now, animate))
     : [`<td></td><td colspan="${windows.length + 1}" class="note">No limits</td>`];
   const span = `rowspan="${rows.length}"`;
   const plan = !labelled && card.accounts[0]?.plan ? `<span class="plan">${escape(card.accounts[0].plan)}</span>` : "";
@@ -83,7 +88,7 @@ function providerRows(card: ProviderCard, windows: number[], now: number): strin
 }
 
 /** Cells for each of an account's rows: one per model group, unscoped ("All models") first. */
-function accountRows(account: AccountLimits, labelled: boolean, windows: number[], now: number): string[] {
+function accountRows(account: AccountLimits, labelled: boolean, windows: number[], now: number, animate: boolean): string[] {
   const scopes = [...new Set(account.limits.map((l) => l.scope))].sort((a, b) => Number(a !== null) - Number(b !== null));
   const name = `${account.label}${account.plan ? ` · ${account.plan}` : ""}`;
   const label = labelled ? `<span class="account" title="${escape(name)}">${escape(name)}</span>` : "";
@@ -94,7 +99,7 @@ function accountRows(account: AccountLimits, labelled: boolean, windows: number[
         const group = scope ?? "All models";
         const cells = windows.map((w) => {
           const limit = account.limits.find((l) => l.scope === scope && l.windowSeconds === w);
-          return limit ? limitCell(limit, `${group} ${fmt.windowName(w)}`, now) : "<td></td>";
+          return limit ? limitCell(limit, `${group} ${fmt.windowName(w)}`, now, animate) : "<td></td>";
         });
         return `<td class="group">${escape(group)}${i === 0 ? label : ""}</td>${cells.join("")}`;
       });
@@ -102,35 +107,46 @@ function accountRows(account: AccountLimits, labelled: boolean, windows: number[
   return rows;
 }
 
-/** How much is left and when it resets, or a warning if it runs out first; the rest is on hover. */
-function limitCell(limit: Limit, name: string, now: number): string {
-  const p = pace(limit, now);
+/** A ring shows how much is used with a tick for how far through the window it is; the rest is on hover.
+ *  When the limit won't last until reset, the run-out estimate sits beside the reset time. */
+function limitCell(limit: Limit, name: string, now: number, animate: boolean): string {
+  const p = pace(limit, now, limit.trend ?? null);
   const resetsAt = fmt.moment(Date.parse(limit.resetsAt), now);
+  const used = Math.min(limit.usedPercent, 100);
   const exhausted = limit.usedPercent >= 100;
   const overPace = !exhausted && p.runsOutAt !== null;
 
   let when = resetsAt;
-  if (exhausted) when = `<span class="pace-warning">limit reached</span>`;
-  else if (p.runsOutAt !== null) when = `<span class="pace-warning">runs out ~${fmt.moment(p.runsOutAt, now)}</span>`;
+  if (exhausted) when = `<span class="pace-warning">limit reached</span> <span class="muted">· resets ${resetsAt}</span>`;
+  else if (p.runsOutAt !== null) {
+    when = `<span class="pace-warning">runs out ~${fmt.moment(p.runsOutAt, now)}</span> <span class="muted">· resets ${resetsAt}</span>`;
+  }
 
   const detail = [
     `${fmt.percent(limit.usedPercent)} used`,
     `${fmt.percent(p.elapsedFraction * 100)} through the window`,
     `resets ${resetsAt}`,
+    p.trendRate !== null ? `burning ~${p.trendRate.toFixed(1)}%/h recently` : "",
     exhausted || overPace ? "" : p.projectedPercent === null
       ? "too early to estimate"
-      : `~${fmt.percent(100 - p.projectedPercent)} left at reset at this pace`,
+      : `~${fmt.percent(100 - p.projectedPercent)} left at reset ${p.fromTrend ? "at the recent rate" : "at this pace"}`,
   ].filter(Boolean).join(" · ");
 
+  const sweep = animate ? ` style="stroke-dashoffset:${used}"` : "";
+  const left = Math.max(0, 100 - limit.usedPercent);
   return `
     <td><div class="limit" title="${escape(detail)}">
-      <span class="limit-left num"><strong>${fmt.percent(Math.max(0, 100 - limit.usedPercent))}</strong> left</span>
-      <div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${limit.usedPercent}"
-           aria-label="${escape(name)} usage">
-        <div class="meter-fill ${exhausted ? "exhausted" : overPace ? "over-pace" : ""}"
-             style="width:${Math.min(limit.usedPercent, 100)}%"></div>
-        <div class="meter-elapsed" style="left:${p.elapsedFraction * 100}%"></div>
-      </div>
+      <span class="ring ${exhausted ? "exhausted" : overPace ? "over-pace" : ""}" role="meter" aria-valuemin="0"
+           aria-valuemax="100" aria-valuenow="${limit.usedPercent}" aria-label="${escape(name)} usage">
+        <svg viewBox="0 0 36 36" aria-hidden="true">
+          <circle class="ring-track" cx="18" cy="18" r="15.5" pathLength="100" />
+          <circle class="ring-fill" cx="18" cy="18" r="15.5" pathLength="100"
+                  stroke-dasharray="${used} ${100 - used}"${sweep} />
+          <line class="ring-tick" x1="18" y1="2" x2="18" y2="7"
+                transform="rotate(${(p.elapsedFraction * 360).toFixed(1)} 18 18)" />
+        </svg>
+        <span class="ring-num num${left >= 100 ? " wide" : ""}">${fmt.percent(left)}</span>
+      </span>
       <span class="limit-when num">${when}</span>
     </div></td>`;
 }
@@ -155,16 +171,136 @@ function resetsHtml(resets: Resets | null): string {
 const tokensDetail = (t: Tokens) =>
   `${fmt.tokensFull(totalTokens(t))} tokens: ${fmt.tokens(t.input)} in · ${fmt.tokens(t.cacheRead + t.cacheWrite)} cache · ${fmt.tokens(t.output)} out`;
 
+/** Line and area paths over the hourly totals, in a 100×30 box. */
+function sparkPaths(values: number[]): { line: string; area: string } {
+  const max = Math.max(...values, 1);
+  const x = (i: number) => (values.length > 1 ? (i / (values.length - 1)) * 100 : 0).toFixed(1);
+  const y = (v: number) => (28 - (v / max) * 24).toFixed(1);
+  const line = values.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join("");
+  return { line, area: `${line}L100,30L0,30Z` };
+}
+
+/** The four stat cards: today and this week with sparklines, the week's top model, and the month. */
+function statsHtml(summary: Summary, now: number, animate: boolean): string {
+  const today = summary.providers.reduce((sum, c) => sum + totalTokens(c.today), 0);
+  const month = summary.providers.reduce((sum, c) => sum + totalTokens(c.last30Days), 0);
+  const week = summary.weekDaily.reduce((sum, d) => sum + d.total, 0);
+  const top = summary.topModel;
+  const topShare = top && week > 0 ? Math.round((totalTokens(top.tokens) / week) * 100) : 0;
+  const todaySpark = sparkPaths(summary.todayHourly.map((h) => h.total));
+  const weekSpark = sparkPaths(summary.weekDaily.map((d) => d.total));
+  const enter = (i: number) => (animate ? ` enter" style="animation-delay:${i * 60}ms` : "");
+  const spark = (paths: { line: string; area: string }, sweep: boolean) => `
+    <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+      <path class="spark-area" d="${paths.area}" />
+      <path class="spark-line" d="${paths.line}" pathLength="100" ${sweep ? 'style="stroke-dashoffset:100"' : ""} />
+    </svg>`;
+
+  const panel = [
+    `<div class="stat${enter(0)}">
+      <span class="stat-label">Tokens today</span>
+      <span class="stat-value num" data-count="${today}">${fmt.tokens(today)}</span>
+      ${summary.todayHourly.length ? spark(todaySpark, animate) : ""}
+    </div>`,
+    `<div class="stat${enter(1)}">
+      <span class="stat-label">This week</span>
+      <span class="stat-value num" data-count="${week}">${fmt.tokens(week)}</span>
+      ${spark(weekSpark, animate)}
+    </div>`,
+    `<div class="stat${enter(2)}">
+      <span class="stat-label">Top model</span>
+      <span class="stat-value num" data-count="${top ? totalTokens(top.tokens) : ""}">${top ? fmt.tokens(totalTokens(top.tokens)) : "–"}</span>
+      <span class="stat-sub">${top ? `${escape(fmt.modelName(top.model))} · ${topShare}% of the week` : "No usage this week"}</span>
+    </div>`,
+    `<div class="stat${enter(3)}">
+      <span class="stat-label">Last 30 days</span>
+      <span class="stat-value num" data-count="${month}">${fmt.tokens(month)}</span>
+      <span class="stat-sub num">${fmt.tokens(month / 30)}/day on average</span>
+    </div>`,
+  ];
+  return panel.join("");
+}
+
+/** Animate number-bearing stat values up from zero; runs once, on first load. */
+function countUp(scope: HTMLElement): void {
+  const values = [...scope.querySelectorAll<HTMLElement>(".stat-value[data-count]")].filter((el) => el.dataset.count);
+  const start = performance.now();
+  const tick = (t: number): void => {
+    const progress = Math.min(1, (t - start) / 600);
+    const eased = 1 - (1 - progress) ** 3;
+    for (const el of values) el.textContent = fmt.tokens(Number(el.dataset.count) * eased);
+    if (progress < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/** First paint only: sweep the ring arcs and sparkline in from zero (two frames, so the transition runs). */
+function sweepIn(): void {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      for (const el of document.querySelectorAll<SVGElement>(".ring-fill, .spark-line")) el.style.strokeDashoffset = "0";
+    }),
+  );
+}
+
+function renderStats(): void {
+  const summary = state.summary;
+  const stats = $("stats");
+  if (!summary) return;
+  stats.hidden = summary.providers.length === 0;
+  const animate = !entered.stats;
+  stats.innerHTML = statsHtml(summary, Date.now(), animate);
+  if (animate) {
+    entered.stats = true;
+    countUp(stats);
+  }
+}
+
+/** GitHub-style grid of daily tokens: columns are weeks (Monday first), rows are weekdays. */
+function renderHistory(): void {
+  const wrap = $("heatmap");
+  const days = state.history ?? [];
+  const total = days.reduce((sum, d) => sum + totalTokens(d.tokens), 0);
+  $("heatmap-total").textContent = days.length ? `${fmt.tokensFull(total)} tokens over 52 weeks` : "";
+  if (!days.length) {
+    wrap.innerHTML = '<div class="empty">No usage history</div>';
+    return;
+  }
+
+  const max = Math.max(...days.map((d) => totalTokens(d.tokens)), 1);
+  const level = (t: number) => (t === 0 ? 0 : Math.min(4, 1 + Math.floor((t / max) * 4)));
+  const sameDay = (d: Date, e: Date) => d.getFullYear() === e.getFullYear() && d.getMonth() === e.getMonth() && d.getDate() === e.getDate();
+  const now = new Date();
+  const pad = (new Date(days[0]!.start).getDay() + 6) % 7;
+  const cells = [
+    ...Array.from({ length: pad }, () => '<i class="hm-cell blank"></i>'),
+    ...days.map((d) => {
+      const tokens = totalTokens(d.tokens);
+      const classes = `l${level(tokens)}${sameDay(new Date(d.start), now) ? " today" : ""}`;
+      return `<i class="hm-cell ${classes}" title="${fmt.day(d.start)} · ${fmt.tokensFull(tokens)} tokens"></i>`;
+    }),
+  ];
+  wrap.innerHTML = `
+    <div class="hm-labels" aria-hidden="true"><span>Mon</span><span>Wed</span><span>Fri</span></div>
+    <div class="hm-grid" role="img" aria-label="Daily token usage over the last 52 weeks">${cells.join("")}</div>`;
+}
+
 function renderSummary(): void {
   const summary = state.summary;
   if (!summary) return;
   const now = Date.now();
   const limits = $("limits");
   limits.hidden = summary.providers.length === 0;
-  limits.innerHTML = limitsHtml(summary.providers, now);
+  const animate = !entered.limits;
+  limits.innerHTML = limitsHtml(summary.providers, now, animate);
+  if (animate) {
+    entered.limits = true;
+    sweepIn();
+  }
   $("updated").textContent = summary.limitsFetchedAt
     ? `Limits updated ${fmt.ago(Date.parse(summary.limitsFetchedAt), now)}`
     : "Limits not loaded yet";
+  renderStats();
   renderProviderFilter();
 }
 
@@ -308,7 +444,9 @@ function renderUsage(): void {
   } else {
     const data = points(series);
     const empty = series.length === 0 ? "All token types hidden" : "No usage in this range";
-    renderChart($("chart"), data, series, usage.bucketSize, empty, (i, e) => showTooltip(data, series, usage, i, e));
+    const animate = !entered.chart;
+    entered.chart = true;
+    renderChart($("chart"), data, series, usage.bucketSize, empty, (i, e) => showTooltip(data, series, usage, i, e), animate);
   }
 }
 
@@ -375,6 +513,14 @@ async function loadUsage(): Promise<void> {
   renderUsage();
 }
 
+async function loadHistory(): Promise<void> {
+  const response = await fetch("/api/history");
+  state.history = (await response.json()) as DayTotal[];
+  renderHistory();
+}
+
+const loadAll = (): Promise<unknown> => Promise.all([loadSummary(), loadUsage(), loadHistory()]);
+
 onSegment("range", (value) => {
   state.range = value as Range;
   localStorage.setItem("range", value);
@@ -413,15 +559,15 @@ $("legend").addEventListener("click", (e) => {
 $("refresh").addEventListener("click", async (e) => {
   const button = e.currentTarget as HTMLButtonElement;
   button.classList.add("spinning");
-  await Promise.all([loadSummary(true), loadUsage()]);
+  await Promise.all([loadSummary(true), loadUsage(), loadHistory()]);
   button.classList.remove("spinning");
 });
 new ResizeObserver(() => state.view === "chart" && renderUsage()).observe($("chart"));
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") void Promise.all([loadSummary(), loadUsage()]);
+  if (document.visibilityState === "visible") void loadAll();
 });
 setInterval(() => document.visibilityState === "visible" && void loadSummary(), SUMMARY_POLL_MS);
 setInterval(() => document.visibilityState === "visible" && void loadUsage(), USAGE_POLL_MS);
 
 renderUsage();
-void Promise.all([loadSummary(), loadUsage()]);
+void loadAll();

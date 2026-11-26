@@ -11,10 +11,13 @@
       <header class="topbar">
         <h1>Hub</h1>
         <div class="topbar-meta">
+          <span class="dot" aria-hidden="true"></span>
           <span id="updated" class="muted"></span>
           <button id="refresh" type="button" class="icon-button" title="Refresh limits" aria-label="Refresh limits">↻</button>
         </div>
       </header>
+
+      <section id="stats" class="stats" aria-label="Today at a glance" hidden></section>
 
       <section id="limits" class="panel limits" aria-label="Limits" hidden></section>
 
@@ -52,6 +55,14 @@
         <div id="chart" class="chart"></div>
         <div id="tooltip" class="tooltip" role="status" hidden></div>
         <div id="table" class="table-wrap" hidden></div>
+      </section>
+
+      <section class="panel history" aria-labelledby="history-title">
+        <div class="panel-head">
+          <h2 id="history-title">Daily usage</h2>
+          <span id="heatmap-total" class="muted"></span>
+        </div>
+        <div id="heatmap" class="heatmap"></div>
       </section>
     </main>
     <script type="module" src="./app.ts"></script>

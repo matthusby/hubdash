@@ -1,13 +1,17 @@
 import index from "./ui/index.html";
 import { fetchLimits, type LimitsConfig } from "./limits.ts";
-import { RANGES, emptyTokens, type AccountLimits, type Range, type Summary } from "./types.ts";
-import { UsageStore, startOfToday } from "./usage.ts";
+import { pace, trendOf } from "./pace.ts";
+import { RANGES, emptyTokens, totalTokens, type AccountLimits, type Limit, type Range, type Summary } from "./types.ts";
+import { UsageStore, bucketStarts, startOfToday } from "./usage.ts";
 
 const HOME = process.env.HOME ?? "";
 const PORT = Number(process.env.PORT ?? 18400);
 const LIMITS_REFRESH_MS = 5 * 60_000;
 const MANUAL_REFRESH_MIN_MS = 30_000;
 const THIRTY_DAYS_MS = 30 * 86_400_000;
+const HISTORY_MS = 52 * 7 * 86_400_000;
+const WEEK_MS = 7 * 86_400_000;
+const TREND_KEEP_MS = 12 * 3_600_000;
 const PROVIDER_ORDER = ["claude", "codex"];
 
 const limitsConfig: LimitsConfig = {
@@ -22,9 +26,33 @@ let limits = new Map<string, AccountLimits[]>();
 let limitsFetchedAt: Date | null = null;
 let inflight: Promise<void> | null = null;
 
+/** Used-percent readings per limit, so a recent burn rate can be estimated. */
+const trendSamples = new Map<string, { t: number; used: number }[]>();
+const trendKey = (provider: string, label: string, limit: Limit) =>
+  `${provider}|${label}|${limit.scope ?? ""}|${limit.windowSeconds}`;
+
+function recordTrends(fresh: Map<string, AccountLimits[]>): void {
+  const now = Date.now();
+  for (const [provider, accounts] of fresh) {
+    for (const account of accounts) {
+      for (const limit of account.limits) {
+        const key = trendKey(provider, account.label, limit);
+        let samples = trendSamples.get(key);
+        if (!samples) trendSamples.set(key, (samples = []));
+        samples.push({ t: now, used: limit.usedPercent });
+        while (samples.length > 1 && now - samples[0]!.t > TREND_KEEP_MS) samples.shift();
+      }
+    }
+  }
+}
+
+const trendFor = (provider: string, label: string, limit: Limit, now: number) =>
+  trendOf(trendSamples.get(trendKey(provider, label, limit)) ?? [], now);
+
 function refreshLimits(): Promise<void> {
   inflight ??= fetchLimits(limitsConfig)
     .then((fresh) => {
+      recordTrends(fresh);
       limits = fresh;
       limitsFetchedAt = new Date();
     })
@@ -34,19 +62,29 @@ function refreshLimits(): Promise<void> {
 }
 
 function summary(): Summary {
+  const now = Date.now();
   const today = usage.totals(startOfToday());
-  const last30Days = usage.totals(Date.now() - THIRTY_DAYS_MS);
+  const last30Days = usage.totals(now - THIRTY_DAYS_MS);
   const providers = [...new Set([...limits.keys(), ...last30Days.keys()])].sort(
     (a, b) => rank(a) - rank(b) || a.localeCompare(b),
   );
+  const weekDays = new Map(usage.daily(now - WEEK_MS).map((d) => [d.start, totalTokens(d.tokens)]));
   return {
     providers: providers.map((provider) => ({
       provider,
-      accounts: limits.get(provider) ?? [],
+      accounts: (limits.get(provider) ?? []).map((account) => ({
+        ...account,
+        limits: account.limits.map((limit) => ({ ...limit, trend: trendFor(provider, account.label, limit, now) })),
+      })),
       today: today.get(provider) ?? emptyTokens(),
       last30Days: last30Days.get(provider) ?? emptyTokens(),
     })),
     limitsFetchedAt: limitsFetchedAt?.toISOString() ?? null,
+    todayHourly: usage.hourlyTotals(startOfToday(), new Date(now)),
+    weekDaily: bucketStarts("day", 7, new Date(now)).map(
+      (start) => ({ start: new Date(start).toISOString(), total: weekDays.get(new Date(start).toISOString()) ?? 0 }),
+    ),
+    topModel: usage.topModel(now - WEEK_MS),
   };
 }
 
@@ -79,6 +117,7 @@ Bun.serve({
         ? Response.json(usage.series(range))
         : Response.json({ error: `range must be one of ${RANGES.join(", ")}` }, { status: 400 });
     },
+    "/api/history": () => Response.json(usage.daily(Date.now() - HISTORY_MS)),
     "/api/refresh": {
       POST: async () => {
         if (!limitsFetchedAt || Date.now() - limitsFetchedAt.getTime() > MANUAL_REFRESH_MIN_MS) {

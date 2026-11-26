@@ -11,13 +11,17 @@ where your tokens went.
 
 ## What it shows
 
+- **Stat cards**: tokens today with an hourly sparkline, a countdown to the next reset, the tightest limit
+  across every account, and how many resets are available to spend.
 - **A limits table**: a row per provider and model group (Claude's Fable, Antigravity's Gemini, …), a column
-  per window (5-hour, weekly). Each cell shows how much is left, how far through the window you are, and when it
-  resets, or a warning if you're on pace to run out first. Hover a cell for usage and a pace estimate.
+  per window (5-hour, weekly). Each cell is a ring showing how much is used with a tick for how far through
+  the window you are, and when it resets, or a warning if you're on pace to run out first. Hover a cell for
+  usage and a pace estimate.
 - **Resets available** and **tokens** today and over the last 30 days, at the end of each provider's rows. Hover
   for what each reset refills and when it expires, or for the token breakdown.
 - **Token usage over time** for a day, week, month, or 6 months. Filter by provider or model, stack by token
   type (input, cache read, cache write, output) or by model, or switch to a table.
+- **A daily-usage heatmap** over the last year, GitHub-style.
 
 ## How it works
 

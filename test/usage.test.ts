@@ -46,3 +46,50 @@ test("series sums uncached input, cache, and output per provider and model into 
   });
   expect(yesterday!.byProvider).toEqual({ codex: { "gpt-6.1-sol": { input: 7, cacheRead: 70, cacheWrite: 0, output: 3 } } });
 });
+
+describe("history", () => {
+  test("daily sums tokens per local day and hourlyTotals zero-fills from the start of the day", () => {
+    const path = join(dir, "history.sqlite");
+    const db = new Database(path);
+    db.run(`create table usage_events (timestamp_ms integer, provider text, model text, normalized_uncached_input_tokens integer,
+      normalized_cache_read_tokens integer, normalized_cache_creation_tokens integer, output_tokens integer)`);
+    const insert = db.prepare("insert into usage_events values (?, ?, ?, ?, ?, ?, ?)");
+    insert.run(new Date(2026, 10, 19, 10).getTime(), "claude", "claude-opus-5-5", 10, 0, 0, 0);
+    insert.run(new Date(2026, 10, 19, 10, 30).getTime(), "claude", "claude-opus-5-5", 5, 0, 0, 0);
+    insert.run(new Date(2026, 10, 19, 14).getTime(), "codex", "gpt-6.1-sol", 1, 2, 3, 4);
+    insert.run(new Date(2026, 10, 18, 23).getTime(), "codex", "gpt-6.1-sol", 7, 0, 0, 0);
+    db.close();
+
+    const store = new UsageStore(path);
+    const now = new Date(2026, 10, 19, 15);
+    const days = store.daily(new Date(2026, 10, 18).getTime());
+    expect(days).toEqual([
+      { start: new Date(2026, 10, 18).toISOString(), tokens: { input: 7, cacheRead: 0, cacheWrite: 0, output: 0 } },
+      { start: new Date(2026, 10, 19).toISOString(), tokens: { input: 16, cacheRead: 2, cacheWrite: 3, output: 4 } },
+    ]);
+
+    const hours = store.hourlyTotals(new Date(2026, 10, 19).getTime(), now);
+    expect(hours).toHaveLength(16);
+    expect(hours[10]).toEqual({ start: new Date(2026, 10, 19, 10).toISOString(), total: 15 });
+    expect(hours[9]).toEqual({ start: new Date(2026, 10, 19, 9).toISOString(), total: 0 });
+    expect(hours[14]).toEqual({ start: new Date(2026, 10, 19, 14).toISOString(), total: 10 });
+  });
+
+  test("topModel picks the busiest model since the given time", () => {
+    const path = join(dir, "top.sqlite");
+    const db = new Database(path);
+    db.run(`create table usage_events (timestamp_ms integer, provider text, model text, normalized_uncached_input_tokens integer,
+      normalized_cache_read_tokens integer, normalized_cache_creation_tokens integer, output_tokens integer)`);
+    const insert = db.prepare("insert into usage_events values (?, ?, ?, ?, ?, ?, ?)");
+    insert.run(new Date(2026, 10, 19, 10).getTime(), "claude", "claude-opus-5-5", 10, 10, 10, 10);
+    insert.run(new Date(2026, 10, 19, 11).getTime(), "claude", "claude-opus-5-5", 5, 5, 5, 5);
+    insert.run(new Date(2026, 10, 19, 12).getTime(), "codex", "gpt-6.1-sol", 10, 0, 0, 0);
+    db.close();
+
+    const store = new UsageStore(path);
+    expect(store.topModel(new Date(2026, 10, 19).getTime())).toEqual({
+      model: "claude-opus-5-5",
+      tokens: { input: 15, cacheRead: 15, cacheWrite: 15, output: 15 },
+    });
+  });
+});

@@ -4,6 +4,13 @@ export interface Limit {
   usedPercent: number;
   resetsAt: string;
   windowSeconds: number;
+  /** How fast this limit has been burning recently, in percent of the window per hour; null when unknown. */
+  trend?: Trend | null;
+}
+
+/** Observed recent burn rate of a limit, from consecutive usage samples. */
+export interface Trend {
+  percentPerHour: number;
 }
 
 export interface AccountLimits {
@@ -34,10 +41,25 @@ export interface ProviderCard {
   last30Days: Tokens;
 }
 
+/** Token total for one time bucket, keyed by its local start. */
+export interface Total { start: string; total: number }
+
 export interface Summary {
   providers: ProviderCard[];
   limitsFetchedAt: string | null;
+  /** Per-hour totals since the start of today, zero-filled; the sparkline under the today stat. */
+  todayHourly: Total[];
+  /** Per-day totals over the last 7 local days, zero-filled; the week stat and its sparkline. */
+  weekDaily: Total[];
+  /** The busiest model over the last 7 days; null when nothing ran. */
+  topModel: ModelTotal | null;
 }
+
+/** One day's tokens, keyed by its local-midnight start. */
+export interface DayTotal { start: string; tokens: Tokens }
+
+/** The busiest model over a period. */
+export interface ModelTotal { model: string; tokens: Tokens }
 
 export const RANGES = ["day", "week", "month", "6m"] as const;
 export type Range = (typeof RANGES)[number];

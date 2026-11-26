@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { emptyTokens, type Bucket, type BucketSize, type Range, type Tokens, type UsageSeries } from "./types.ts";
+import { emptyTokens, totalTokens, type Bucket, type BucketSize, type DayTotal, type ModelTotal, type Range, type Tokens, type Total, type UsageSeries } from "./types.ts";
 
 const HOUR_MS = 3_600_000;
 
@@ -54,6 +54,43 @@ export class UsageStore {
       addTokens(((bucket.byProvider[row.provider] ??= {})[row.model] ??= emptyTokens()), row);
     }
     return { range, bucketSize, buckets: [...buckets.values()] };
+  }
+
+  /** Per-day token sums since `sinceMs`, ascending; quiet days are absent. */
+  daily(sinceMs: number): DayTotal[] {
+    const days = new Map<number, Tokens>();
+    for (const row of this.hourly(sinceMs)) {
+      const start = bucketStart(row.hour * HOUR_MS, "day");
+      addTokens(days.get(start) ?? set(days, start, emptyTokens()), row);
+    }
+    return [...days]
+      .sort(([a], [b]) => a - b)
+      .map(([start, tokens]) => ({ start: new Date(start).toISOString(), tokens }));
+  }
+
+  /** Token totals per local hour since `sinceMs`, zero-filled through the current hour. */
+  hourlyTotals(sinceMs: number, now: Date = new Date()): Total[] {
+    const totals = new Map<number, number>();
+    for (const row of this.hourly(sinceMs)) {
+      const start = bucketStart(row.hour * HOUR_MS, "hour");
+      totals.set(start, (totals.get(start) ?? 0) + totalTokens(row));
+    }
+    return bucketStarts("hour", 25, now)
+      .filter((start) => start >= bucketStart(sinceMs, "hour"))
+      .map((start) => ({ start: new Date(start).toISOString(), total: totals.get(start) ?? 0 }));
+  }
+
+  /** The model that burned the most tokens since `sinceMs`; null when nothing ran. */
+  topModel(sinceMs: number): ModelTotal | null {
+    const totals = new Map<string, Tokens>();
+    for (const row of this.hourly(sinceMs)) {
+      addTokens(totals.get(row.model) ?? set(totals, row.model, emptyTokens()), row);
+    }
+    let top: ModelTotal | null = null;
+    for (const [model, tokens] of totals) {
+      if (!top || totalTokens(tokens) > totalTokens(top.tokens)) top = { model, tokens };
+    }
+    return top;
   }
 }
 

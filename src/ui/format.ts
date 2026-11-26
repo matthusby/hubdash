@@ -19,6 +19,9 @@ const weekdayTime = new Intl.DateTimeFormat("en", { weekday: "short", hour: "num
 const monthDay = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
 const stampFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
 
+/** "Nov 14": a bare month and day, for heatmap cells and stat captions. */
+export const day = (ms: number | Date | string): string => monthDay.format(typeof ms === "string" ? new Date(ms) : ms);
+
 /** "1:09 PM" today, "Tue 9:00 AM" within a week, otherwise "Nov 25". */
 export function moment(ms: number, now: number = Date.now()): string {
   const days = (ms - now) / 86_400_000;
