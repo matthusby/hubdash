@@ -6,7 +6,7 @@ where your tokens went.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <img alt="hubdash showing a table of Claude, Codex, and Antigravity limits above a token usage chart" src="docs/screenshot-light.png">
+  <img alt="hubdash showing stat cards, a limits table with usage rings, a token usage chart, and a daily usage heatmap" src="docs/screenshot-light.png">
 </picture>
 
 ## What it shows
